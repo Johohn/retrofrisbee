@@ -6,6 +6,35 @@ const F = CONFIG.FIELD;
 function createRenderer(canvas) {
   const ctx = canvas.getContext('2d');
 
+  // ── Sprite assets (offensive players, pixel-art frames from img/) ──
+  // Drawn only once fully decoded; circles remain the fallback until then.
+  const spriteFiles = {
+    standing:      'img/standing.png',
+    running1:      'img/running1.png',
+    running2:      'img/running2.png',
+    thrower:       'img/thrower.png',
+    throwing:      'img/throwing.png',
+    disc:          'img/disc.png',
+    opp_standing:  'img/opp_standing.png',
+    opp_running1:  'img/opp_running1.png',
+    opp_running2:  'img/opp_running2.png',
+    marker:        'img/marker.png',
+    // Left-facing variants for running west / northwest / southwest
+    running1_inv:      'img/running1_inv.png',
+    running2_inv:      'img/running2_inv.png',
+    opp_running1_inv:  'img/opp_running1_inv.png',
+    opp_running2_inv:  'img/opp_running2_inv.png',
+  };
+  const sprites = {};
+  let spritesReady = 0;
+  const spriteTotal = Object.keys(spriteFiles).length;
+  for (const [name, src] of Object.entries(spriteFiles)) {
+    const img = new Image();
+    img.onload = () => { spritesReady++; };
+    img.src = src;
+    sprites[name] = img;
+  }
+
   // ── Coordinate helpers ──
   // Screen Y is canvas y; world Y is the same (no vertical scroll).
   // World X offset by camera.
@@ -15,11 +44,23 @@ function createRenderer(canvas) {
   // ── View offsets (set each frame) ──
   const view = { camX: 0 };
 
+  // ── Field background (playing_field.png: 1650x450 world strip with grass,
+  // end zones, end lines and brick marks baked in) ──
+  const fieldImage = new Image();
+  fieldImage.src = 'img/playing_field.png';
+
   // ── Draw field (tiled grass with end zones) ──
   function drawField() {
     const W = F.VIEWPORT_W;
     const H = F.VIEWPORT_H;
 
+    if (fieldImage.naturalWidth) {
+      // Single blit at the world origin — the camera scroll moves it into view
+      ctx.drawImage(fieldImage, Math.round(sx(0)), 0, F.TOTAL_W, H);
+      return;
+    }
+
+    // Fallback: procedural field until the image has decoded
     // Background fill (sky / crowd area)
     ctx.fillStyle = '#1a1a2e';
     ctx.fillRect(0, 0, W, F.FIELD_TOP);
@@ -134,6 +175,57 @@ function createRenderer(canvas) {
     }
   }
 
+  // ── Draw a player as a pixel-art sprite ──
+  // `moving` picks the alternating run frames; idle players stand. A
+  // `frameName` override pins an exact frame (thrower / throwing poses).
+  // `set` picks the sprite family: 'offense' (yellow) or 'defense' (red).
+  // `facing` ('left' | 'right') selects the mirrored run frames when running
+  // westward. Falls back to the flat circle until sprites have decoded.
+  function drawSpritePlayer(x, y, moving, color, radius, label, glow, frameName, set, facing) {
+    if (spritesReady < spriteTotal) {
+      drawPlayer(x, y, color, radius, label, glow);
+      return;
+    }
+    const scrX = sx(x);
+    const scrY = sy(y);
+    const left = facing === 'left';
+    const idle = set === 'defense' ? sprites.opp_standing : sprites.standing;
+    const run1 = set === 'defense'
+      ? (left ? sprites.opp_running1_inv : sprites.opp_running1)
+      : (left ? sprites.running1_inv : sprites.running1);
+    const run2 = set === 'defense'
+      ? (left ? sprites.opp_running2_inv : sprites.opp_running2)
+      : (left ? sprites.running2_inv : sprites.running2);
+    const frame = frameName
+      ? sprites[frameName]
+      : moving
+        ? (Math.floor(Date.now() / CONFIG.SPRITES.FRAME_MS) % 2 === 0 ? run1 : run2)
+        : idle;
+    const w = frame.naturalWidth * CONFIG.SPRITES.SCALE;
+    const h = frame.naturalHeight * CONFIG.SPRITES.SCALE;
+    // Feet anchored a little below the logical position (the old circle's
+    // bottom edge) so the sprite stands on the same spot
+    const dx = Math.round(scrX - w / 2);
+    const dy = Math.round(scrY + radius - h);
+
+    // Ground shadow
+    ctx.fillStyle = C.DISC_SHADOW;
+    ctx.beginPath();
+    ctx.ellipse(scrX, scrY + radius, w * 0.35, 2.5, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.imageSmoothingEnabled = false; // keep the pixels crisp when upscaled
+    ctx.drawImage(frame, dx, dy, w, h);
+    ctx.imageSmoothingEnabled = true;
+
+    if (label) {
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 8px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(label, scrX, scrY - h + 2);
+    }
+  }
+
   // ── Draw the disc ──
   function drawDisc(dState) {
     if (!dState) return;
@@ -151,16 +243,26 @@ function createRenderer(canvas) {
     const elev = -Math.min(dState.z, 80) * 0.3;
     const drawY = scrY + elev;
 
-    // Disc body
-    ctx.fillStyle = C.DISC_COLOR;
-    ctx.beginPath();
-    ctx.arc(scrX, drawY, CONFIG.DISC.RADIUS, 0, Math.PI * 2);
-    ctx.fill();
+    if (spritesReady >= spriteTotal) {
+      // Sprite body
+      const img = sprites.disc;
+      const w = img.naturalWidth * CONFIG.SPRITES.SCALE;
+      const h = img.naturalHeight * CONFIG.SPRITES.SCALE;
+      ctx.imageSmoothingEnabled = false; // keep the pixels crisp when upscaled
+      ctx.drawImage(img, Math.round(scrX - w / 2), Math.round(drawY - h / 2), w, h);
+      ctx.imageSmoothingEnabled = true;
+    } else {
+      // Circle fallback
+      ctx.fillStyle = C.DISC_COLOR;
+      ctx.beginPath();
+      ctx.arc(scrX, drawY, CONFIG.DISC.RADIUS, 0, Math.PI * 2);
+      ctx.fill();
 
-    // Rim highlight
-    ctx.strokeStyle = '#ccc';
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
+      // Rim highlight
+      ctx.strokeStyle = '#ccc';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
   }
 
   // ── Draw the aim line with curved trajectory preview ──
@@ -439,7 +541,7 @@ function createRenderer(canvas) {
     // 2. Cutters (offense without disc)
     for (let i = 0; i < gs.cutters.length; i++) {
       const cut = gs.cutters[i];
-      drawPlayer(cut.x, cut.y, C.PLAYER_O, CONFIG.CUTTER.RADIUS, `R${i+1}`, cut.isOpen);
+      drawSpritePlayer(cut.x, cut.y, cut.moving, C.PLAYER_O, CONFIG.CUTTER.RADIUS, `O${cut.id}`, cut.isOpen, null, null, cut.facing);
       // Open marker
       if (cut.isOpen) {
         const scrX = sx(cut.x);
@@ -456,15 +558,19 @@ function createRenderer(canvas) {
     // 4. Route previews (below players so dots sit under the units)
     drawRoutePreviews(gs);
 
-    // 5. Defenders
+    // 5. Defenders (red sprite family). The thrower's marker pins the marker
+    // pose once he has reached his marking spot (while walking he runs).
     for (const d of gs.defenders) {
-      drawPlayer(d.x, d.y, C.PLAYER_D, CONFIG.DEFENDER.RADIUS, 'D', false);
+      const frameName = d.targetCutter < 0 && !d.moving ? 'marker' : null;
+      drawSpritePlayer(d.x, d.y, d.moving, C.PLAYER_D, CONFIG.DEFENDER.RADIUS, 'D', false, frameName, 'defense', d.facing);
     }
 
-    // 6. Thrower
-    if (gs.phase === 'THROWING' || gs.phase === 'RESULT') {
-      drawPlayer(gs.thrower.x, gs.thrower.y, C.THROWER, CONFIG.THROWER.RADIUS, 'YOU', false);
-    }
+    // 6. Thrower (always visible once on the field — also while the disc flies;
+    // never moves. Holds the disc in THROWING, aims while dragging; after the
+    // release they are a plain player again → standing frame.)
+    const hasDiscInHand = gs.phase === 'THROWING';
+    const throwerFrame = hasDiscInHand ? (gs.aim ? 'throwing' : 'thrower') : 'standing';
+    drawSpritePlayer(gs.thrower.x, gs.thrower.y, false, C.THROWER, CONFIG.THROWER.RADIUS, `O${gs.thrower.id}`, false, throwerFrame);
 
     // 7. Disc
     drawDisc(gs.disc);

@@ -20,7 +20,7 @@ const CONFIG = {
 
   // ── Cutters (offensive players without disc) ──
   CUTTER: {
-    COUNT: 4,
+    COUNT: 3,
     RADIUS: 8,
     SPEED: 65,            // px / s  (cut speed — field is 1000px now)
   },
@@ -35,6 +35,13 @@ const CONFIG = {
     INTERCEPT_RADIUS: 18,  // close enough to intercept in resolveCatch
     INTERCEPT_FLIGHT_RADIUS: 28,  // larger radius used during flight
     INTERCEPT_FLIGHT_CHANCE: 0.30,// per-frame chance when defender is at disc
+  },
+
+  // ── Thrower's mark (the defender standing in front of the thrower) ──
+  MARKER: {
+    STAND_DISTANCE: 18,          // px in front of the thrower
+    INTERCEPT_RADIUS: 9,         // smaller reach than a cutter-marking defender
+    INTERCEPT_FLIGHT_RADIUS: 14,
   },
 
   // ── Disc / Throwing ──
@@ -124,6 +131,12 @@ const CONFIG = {
       { id: 'FLUSH_DEEP',       first: 'S',  firstLen: [80, 130],  then: 'NE' },
       { id: 'IN_CUT',           first: 'SE', firstLen: [180, 240], then: 'W'  },
     ],
+  },
+
+  // ── Sprites (offensive players) ──
+  SPRITES: {
+    SCALE: 1.8,          // upscale factor for the pixel-art frames
+    FRAME_MS: 140,       // duration of one running animation frame
   },
 
   // ── Colours (retro-ish palette) ──

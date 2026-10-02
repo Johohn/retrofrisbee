@@ -3,6 +3,7 @@
 const GF = CONFIG.FIELD;
 const C_CUT = CONFIG.CUTTER;
 const C_DEF = CONFIG.DEFENDER;
+const C_MARK = CONFIG.MARKER;
 const C_DSC = CONFIG.DISC;
 const C_CTH = CONFIG.CATCH;
 
@@ -69,7 +70,7 @@ function createGame() {
   function init() {
     score = 0;
     defScore = 0;
-    thrower = { x: -100, y: -100 }; // off-screen until the first resetPoint
+    thrower = { x: -100, y: -100, id: C_CUT.COUNT + 1 }; // off-screen until the first resetPoint
     wind = 10 + Math.random() * 15;
     wind = Math.random() < 0.5 ? wind : -wind;
     windTimer = Math.random() * CONFIG.WIND.CHANGE_INTERVAL; // stagger first change
@@ -84,7 +85,7 @@ function createGame() {
     const yPad = 25;
     const cy = GF.FIELD_TOP + yPad + Math.random() * (GF.FIELD_BOTTOM - GF.FIELD_TOP - yPad * 2);
 
-    thrower = { x: cx, y: cy };
+    thrower = { x: cx, y: cy, id: C_CUT.COUNT + 1 };
     disc = null;
     stallCount = 0;
     routePreviewPaths = [];
@@ -93,8 +94,7 @@ function createGame() {
     // a different long route and show every route preview once.
     const spread = [
       { x: cx + 50,  y: cy - 50 },
-      { x: cx + 85,  y: cy - 15 },
-      { x: cx + 65,  y: cy + 35 },
+      { x: cx + 85,  y: cy + 15 },
       { x: cx + 40,  y: cy + 70 },
     ];
     cutters = [];
@@ -105,20 +105,25 @@ function createGame() {
       cutters.push({
         x: sp.x,
         y: clamp(sp.y, GF.FIELD_TOP + 15, GF.FIELD_BOTTOM - 15),
+        id: i + 1,         // stable O-label across possessions
         path: [], wpIdx: 0, flashTimer: 0, preview: null,
+        facing: 'right',   // sprite sheet faces right; flipped frames run left
       });
     }
     assignRoutes(cx, cy);
 
-    // Defenders — each assigned to a cutter
+    // Defenders — one per cutter, plus one mark for the thrower
+    // (targetCutter = -1 means "marking the thrower")
     defenders = [];
     for (let i = 0; i < C_DEF.COUNT; i++) {
       const c = cutters[i];
+      const isMark = !c;
       defenders.push({
-        x: c.x + 10,
-        y: c.y,
-        targetCutter: i,
+        x: (isMark ? thrower.x + C_MARK.STAND_DISTANCE : c.x + 10),
+        y: (isMark ? thrower.y : c.y),
+        targetCutter: isMark ? -1 : i,
         reactionTimer: 0,
+        facing: 'right',
       });
     }
 
@@ -128,12 +133,17 @@ function createGame() {
   // ── Move all players (cutters + defenders) ──
   // Cutters run their assigned route for this possession. If the disc comes
   // near, they abandon the route and run toward the disc (CHASE_DISC.RADIUS).
+  // A player counts as moving only when they were actually displaced this
+  // frame — pushing against a field edge or sitting on the disc spot must
+  // not play the run animation.
+  const MOVING_EPS = 0.05; // px of displacement per frame that counts as running
   function movePlayers(dt) {
     const chaseR = CONFIG.CHASE_DISC.RADIUS;
     const hasDisc = !!disc;
 
     for (let i = 0; i < cutters.length; i++) {
       const c = cutters[i];
+      const px = c.x, py = c.y;
       if (hasDisc && dist(c.x, c.y, disc.x, disc.y) < chaseR) {
         // Disc is near — run toward it instead of the route
         const dir = norm(disc.x - c.x, disc.y - c.y);
@@ -144,30 +154,48 @@ function createGame() {
       }
       c.x = clamp(c.x, 10, GF.TOTAL_W - 10);
       c.y = clamp(c.y, GF.FIELD_TOP + 6, GF.FIELD_BOTTOM - 6);
+      c.moving = dist(px, py, c.x, c.y) > MOVING_EPS;
+      // Face the direction of horizontal travel (vertical-only motion keeps
+      // the last facing)
+      if (Math.abs(c.x - px) > MOVING_EPS) c.facing = c.x < px ? 'left' : 'right';
     }
     for (let i = 0; i < defenders.length; i++) {
       const d = defenders[i];
-      const c = cutters[d.targetCutter];
-      if (!c) continue;
-      if (hasDisc) {
-        // Defenders are drawn toward the disc too, for interception chances
-        const dd = dist(d.x, d.y, disc.x, disc.y);
-        if (dd < chaseR) {
-          const dir = norm(disc.x - d.x, disc.y - d.y);
+      const px = d.x, py = d.y;
+      if (d.targetCutter < 0) {
+        // The thrower's mark: stands directly in front of the thrower on the
+        // downfield side and never chases the disc. Only walks when a new
+        // catch moves the thrower — otherwise he holds his spot.
+        const markX = thrower.x + C_MARK.STAND_DISTANCE;
+        const markY = thrower.y;
+        if (dist(d.x, d.y, markX, markY) > 2) {
+          const dir = norm(markX - d.x, markY - d.y);
           d.x += dir.x * C_DEF.SPEED * dt;
           d.y += dir.y * C_DEF.SPEED * dt;
-          d.x = clamp(d.x, 0, GF.TOTAL_W);
-          d.y = clamp(d.y, GF.FIELD_TOP + 5, GF.FIELD_BOTTOM - 5);
-          continue;
+        }
+      } else if (hasDisc && dist(d.x, d.y, disc.x, disc.y) < chaseR) {
+        // Defenders are drawn toward the disc too, for interception chances
+        const dir = norm(disc.x - d.x, disc.y - d.y);
+        d.x += dir.x * C_DEF.SPEED * dt;
+        d.y += dir.y * C_DEF.SPEED * dt;
+      } else {
+        const c = cutters[d.targetCutter];
+        if (c) {
+          const markX = c.x - 8;
+          const markY = c.y + (c.y > 200 ? -6 : 6);
+          // Settle when on the mark — stepping toward it every frame would keep
+          // the run animation going forever
+          if (dist(d.x, d.y, markX, markY) > 2) {
+            const dir = norm(markX - d.x, markY - d.y);
+            d.x += dir.x * C_DEF.SPEED * dt;
+            d.y += dir.y * C_DEF.SPEED * dt;
+          }
         }
       }
-      const markX = c.x - 8;
-      const markY = c.y + (c.y > 200 ? -6 : 6);
-      const dir = norm(markX - d.x, markY - d.y);
-      d.x += dir.x * C_DEF.SPEED * dt;
-      d.y += dir.y * C_DEF.SPEED * dt;
       d.x = clamp(d.x, 0, GF.TOTAL_W);
       d.y = clamp(d.y, GF.FIELD_TOP + 5, GF.FIELD_BOTTOM - 5);
+      d.moving = dist(px, py, d.x, d.y) > MOVING_EPS;
+      if (Math.abs(d.x - px) > MOVING_EPS) d.facing = d.x < px ? 'left' : 'right';
     }
   }
 
@@ -241,18 +269,19 @@ function createGame() {
 
   // Walk along the current route waypoints. When the route is done, the
   // cutter holds that spot (their second leg already ran to the field edge,
-  // so there is nowhere left to cut).
+  // so there is nowhere left to cut). Whether the cutter is actually running
+  // is derived from displacement in movePlayers.
   function moveAlongPath(c, dt, speed) {
     if (c.wpIdx >= c.path.length) return;
     const wp = c.path[c.wpIdx];
     const d = dist(c.x, c.y, wp.x, wp.y);
     if (d < 8) {
       c.wpIdx++;
-    } else {
-      const dir = norm(wp.x - c.x, wp.y - c.y);
-      c.x += dir.x * speed * dt;
-      c.y += dir.y * speed * dt;
+      return;
     }
+    const dir = norm(wp.x - c.x, wp.y - c.y);
+    c.x += dir.x * speed * dt;
+    c.y += dir.y * speed * dt;
   }
 
   // ── Disc flight physics (2-D, shared) ──
@@ -368,6 +397,7 @@ function createGame() {
       age: 0,
     };
 
+    currentAim = null; // release the aiming pose
     phase = 'DISC_FLYING';
   }
 
@@ -465,11 +495,13 @@ function createGame() {
       return;
     }
 
-    // Interception check — defender close to disc
+    // Interception check — defender close to disc (the thrower's mark has a
+    // smaller reach)
     for (let i = 0; i < defenders.length; i++) {
       const d = defenders[i];
       const dd = dist(d.x, d.y, disc.x, disc.y);
-      if (dd < C_DEF.INTERCEPT_RADIUS && Math.random() < 0.40) {
+      const radius = d.targetCutter < 0 ? C_MARK.INTERCEPT_RADIUS : C_DEF.INTERCEPT_RADIUS;
+      if (dd < radius && Math.random() < 0.40) {
         showResult('Intercepted!', disc.x);
         return;
       }
@@ -511,12 +543,14 @@ function createGame() {
         // Complete — receiver becomes thrower. The old thrower rejoins as a
         // cutter at their current position; everyone gets a fresh route.
         const oldTx = thrower.x, oldTy = thrower.y;
+        const oldTId = thrower.id;
         thrower.x = best.x;
         thrower.y = best.y;
+        thrower.id = best.id;   // the catcher keeps his O-label as thrower
         disc = null;
 
         // Replace the catcher's slot with the old thrower (new cutter)
-        const newC = { x: oldTx, y: oldTy, path: [], wpIdx: 0, flashTimer: 0, preview: null };
+        const newC = { x: oldTx, y: oldTy, id: oldTId, path: [], wpIdx: 0, flashTimer: 0, preview: null, facing: 'right' };
         cutters[bestIdx] = newC;
         handsStats[bestIdx] = 0.60 + Math.random() * 0.35;
 
@@ -524,9 +558,12 @@ function createGame() {
         // shows their route preview once for this possession
         assignRoutes(thrower.x, thrower.y);
 
-        // Reassign defenders
+        // Reassign defenders by identity: the new thrower's defender becomes
+        // the marker; the previous marker takes over his man (the old
+        // thrower, now a cutter at bestIdx). Every other matchup is untouched.
         for (let i = 0; i < defenders.length; i++) {
-          defenders[i].targetCutter = i;
+          if (defenders[i].targetCutter === bestIdx) defenders[i].targetCutter = -1;
+          else if (defenders[i].targetCutter === -1) defenders[i].targetCutter = bestIdx;
           defenders[i].reactionTimer = 0;
         }
 
@@ -750,10 +787,12 @@ function createGame() {
         }
       }
 
-      // Defender interception during flight
+      // Defender interception during flight (the thrower's mark has a
+      // smaller reach)
       for (const d of defenders) {
         const dd = dist(d.x, d.y, disc.x, disc.y);
-        if (dd < C_DEF.INTERCEPT_FLIGHT_RADIUS &&
+        const radius = d.targetCutter < 0 ? C_MARK.INTERCEPT_FLIGHT_RADIUS : C_DEF.INTERCEPT_FLIGHT_RADIUS;
+        if (dd < radius &&
             Math.random() < C_DEF.INTERCEPT_FLIGHT_CHANCE &&
             disc.z < 12) {
           showResult('Intercepted!', disc.x);
@@ -839,11 +878,13 @@ function createGame() {
     let openIdx = -1;
     let bestScore = -Infinity;
     const cutterInfos = cutters.map((c, i) => {
-      const d = defenders[i];
+      // Pair each cutter with the defender actually assigned to him (index
+      // pairing broke once matchups became identity-based)
+      const d = defenders.find(dd => dd.targetCutter === i);
       const defDist = d ? dist(d.x, d.y, c.x, c.y) : 999;
       const scoreRaw = defDist - C_DEF.MARK_DISTANCE;
       if (scoreRaw > bestScore) { bestScore = scoreRaw; openIdx = i; }
-      return { x: c.x, y: c.y, isOpen: false };
+      return { x: c.x, y: c.y, id: c.id, isOpen: false, moving: !!c.moving, facing: c.facing };
     });
     if (openIdx >= 0) cutterInfos[openIdx].isOpen = true;
     const openReceiver = openIdx >= 0 ? cutters[openIdx] : null;
@@ -865,7 +906,7 @@ function createGame() {
       camera: { x: camera.x },
       thrower,
       cutters: cutterInfos,
-      defenders: defenders.map(d => ({ x: d.x, y: d.y })),
+      defenders: defenders.map(d => ({ x: d.x, y: d.y, moving: !!d.moving, facing: d.facing, targetCutter: d.targetCutter })),
       disc: discState,
       stallCount: Math.min(Math.ceil(stallCount), CONFIG.STALL.COUNT),
       stallRaw: stallCount,
