@@ -366,13 +366,25 @@ function createRenderer(canvas) {
     const W = F.VIEWPORT_W;
 
     // ── Score ──
+    const my = gs.teams ? gs.teams.my : 'YOU';
+    const opp = gs.teams ? gs.teams.opp : 'OPP';
+    const scoreStr = `${my} ${gs.score} - ${gs.defScore} ${opp}`;
+    ctx.font = 'bold 16px monospace';
+    const boxW = Math.max(160, ctx.measureText(scoreStr).width + 24);
     ctx.fillStyle = C.HUD_BG;
-    ctx.fillRect(W / 2 - 70, 4, 140, 28);
+    ctx.fillRect(W / 2 - boxW / 2, 4, boxW, 28);
 
     ctx.fillStyle = C.HUD_TEXT;
-    ctx.font = 'bold 16px monospace';
     ctx.textAlign = 'center';
-    ctx.fillText(`YOU ${gs.score}  OPP ${gs.defScore}`, W / 2, 23);
+    ctx.fillText(scoreStr, W / 2, 23);
+
+    // Tournament / match round label (manager mode)
+    if (gs.matchTag) {
+      ctx.fillStyle = '#ffdd44';
+      ctx.font = 'bold 10px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(gs.matchTag.toUpperCase(), W / 2, 44);
+    }
 
     if (gs.phase === 'THROWING' || gs.phase === 'DISC_FLYING') {
       // ── Stall count ──
@@ -496,6 +508,9 @@ function createRenderer(canvas) {
     ctx.fillStyle = 'rgba(0,0,0,0.8)';
     ctx.fillRect(0, 0, W, H);
 
+    const my = gs.teams ? gs.teams.my : 'You';
+    const opp = gs.teams ? gs.teams.opp : 'OPP';
+
     ctx.fillStyle = '#ffdd44';
     ctx.font = 'bold 30px monospace';
     ctx.textAlign = 'center';
@@ -504,10 +519,10 @@ function createRenderer(canvas) {
 
     ctx.fillStyle = '#ffffff';
     ctx.font = 'bold 22px monospace';
-    ctx.fillText(`Final:  You ${gs.score}  -  OPP ${gs.defScore}`, W / 2, cy + 10);
+    ctx.fillText(`Final:  ${my} ${gs.score}  -  ${gs.defScore} ${opp}`, W / 2, cy + 10);
 
     const won = gs.score >= gs.targetScore && gs.score > gs.defScore;
-    const msg = won ? 'You won!' : 'Opponent wins! Better luck next time!';
+    const msg = won ? 'You won!' : `${opp} wins! Better luck next time!`;
     ctx.fillStyle = '#88ccff';
     ctx.font = '14px monospace';
     ctx.fillText(msg, W / 2, cy + 45);
@@ -516,7 +531,7 @@ function createRenderer(canvas) {
     if (blink) {
       ctx.fillStyle = '#ffffff';
       ctx.font = 'bold 14px monospace';
-      ctx.fillText('TAP TO RESTART', W / 2, cy + 90);
+      ctx.fillText('TAP TO CONTINUE', W / 2, cy + 90);
     }
 
     ctx.textBaseline = 'alphabetic';

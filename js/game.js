@@ -49,6 +49,18 @@ function createGame() {
   let messageTimer = 0;
   let oppAdvanceSpot = null;  // where the player gets the disc after an opponent advance
   let oppState = null;         // { zoneLabel, results[], resultIdx } for stepped messages
+
+  // ── Match context (set by the tournament manager via startMatch) ──
+  let teams = { my: 'You', opp: 'OPP' };
+  let matchTarget = CONFIG.SCORE.WIN;   // points to win the match
+  let oppPower = 3;                     // 1..5 opponent strength (see OPP_FACTOR)
+  let matchTag = '';                    // e.g. 'Quarterfinal'
+  let tournamentLabel = '';
+  let onMatchEnd = null;                // callback({myScore, oppScore, won})
+  let matchEndSent = false;
+  // Opponent skill multiplier on their advance/interception rolls
+  const OPP_FACTOR = () => 0.8 + (oppPower - 3) * 0.07;
+
   const camera = { x: 0, tgtX: 0 };
 
   // Entities
@@ -76,6 +88,46 @@ function createGame() {
     windTimer = Math.random() * CONFIG.WIND.CHANGE_INTERVAL; // stagger first change
     phase = 'MENU';
     camera.x = 0; camera.tgtX = 0;
+  }
+
+  // ── Coin toss: random team gets the first possession ──
+  function coinToss() {
+    if (Math.random() < 0.5) {
+      // We start on offense (RESULT falls through to a normal reset)
+      message = 'Coin toss: you start with the disc.';
+      messageTimer = 1.8;
+    } else {
+      // Opponent starts on offense, disc in their back-field
+      setupOppAdvance(OPP_ZONES.length - 1);
+      message = 'Coin toss: OPP ball (back-field).';
+      messageTimer = 1.8;
+    }
+    phase = 'RESULT';
+  }
+
+  // ── Start a tournament match (called by the manager) ──
+  function startMatch(opts) {
+    teams = { my: opts.myName || 'You', opp: opts.oppName || 'OPP' };
+    matchTarget = opts.target || CONFIG.SCORE.WIN;
+    oppPower = opts.oppPower || 3;
+    matchTag = opts.tag || '';
+    tournamentLabel = opts.tournament || '';
+    onMatchEnd = opts.onEnd || null;
+    matchEndSent = false;
+
+    score = 0;
+    defScore = 0;
+    oppState = null;
+    oppAdvanceSpot = null;
+    cutters = []; defenders = []; disc = null;
+    thrower = { x: -100, y: -100, id: C_CUT.COUNT + 1 };
+    wind = 10 + Math.random() * 15;
+    wind = Math.random() < 0.5 ? wind : -wind;
+    windTimer = Math.random() * CONFIG.WIND.CHANGE_INTERVAL;
+    curveType = 'straight';
+    camera.x = 0; camera.tgtX = 0;
+
+    coinToss();
   }
 
   // ── Reset for a new point ──
@@ -445,7 +497,7 @@ function createGame() {
     const results = [];
     for (let i = startIdx; i > 0; i--) {
       const z = OPP_ZONES[i];
-      results.push({ zone: z, success: Math.random() < z.nextChance });
+      results.push({ zone: z, success: Math.random() < z.nextChance * OPP_FACTOR() });
       if (!results[results.length - 1].success) break;
     }
     oppState = {
@@ -465,12 +517,12 @@ function createGame() {
       // ── Callahan against us: picked off in our own end zone = instant point ──
       if (msg.startsWith('Intercepted') && turnoverX < GF.END_ZONE_W) {
         defScore++;
-        const over = defScore >= CONFIG.SCORE.WIN ? '  Game Over.' : '';
+        const over = defScore >= matchTarget ? '  Game Over.' : '';
         message = `CALLAHAN! Opponent scores.  ${score}-${defScore}.${over}`;
         messageTimer = 2.5;
         oppState = null;
         disc = null;
-        phase = defScore >= CONFIG.SCORE.WIN ? 'GAME_OVER' : 'RESULT';
+        phase = defScore >= matchTarget ? 'GAME_OVER' : 'RESULT';
         return;
       }
 
@@ -480,7 +532,7 @@ function createGame() {
         const z = OPP_ZONES[0];
         oppState = {
           step: 0,
-          results: [{ zone: z, success: Math.random() < z.nextChance }],
+          results: [{ zone: z, success: Math.random() < z.nextChance * OPP_FACTOR() }],
           startLabel: z.label,
           turnOverMsg: msg,
         };
@@ -536,7 +588,7 @@ function createGame() {
       const d = defenders[i];
       const dd = dist(d.x, d.y, disc.x, disc.y);
       const radius = d.targetCutter < 0 ? C_MARK.INTERCEPT_RADIUS : C_DEF.INTERCEPT_RADIUS;
-      if (dd < radius && Math.random() < 0.40) {
+      if (dd < radius && Math.random() < 0.40 * OPP_FACTOR()) {
         showResult('Intercepted!', disc.x);
         return;
       }
@@ -563,7 +615,7 @@ function createGame() {
         // Score! The conceding team takes the next possession.
         score++;
         disc = null;
-        if (score >= CONFIG.SCORE.WIN) {
+        if (score >= matchTarget) {
           message = `SCORE!  You win ${score}-${defScore}`;
           messageTimer = 3.0;
           phase = 'GAME_OVER';
@@ -625,20 +677,7 @@ function createGame() {
     switch (phase) {
       case 'MENU':
         // Coin toss — random team gets the first possession
-        if (input.anyPressed) {
-          if (Math.random() < 0.5) {
-            // We start on offense (RESULT falls through to a normal reset)
-            message = 'Coin toss: you start with the disc.';
-            messageTimer = 1.8;
-            phase = 'RESULT';
-          } else {
-            // Opponent starts on offense, disc in their back-field
-            setupOppAdvance(OPP_ZONES.length - 1);
-            message = 'Coin toss: OPP ball (back-field).';
-            messageTimer = 1.8;
-            phase = 'RESULT';
-          }
-        }
+        if (input.anyPressed) coinToss();
         break;
 
       case 'THROWING':
@@ -654,7 +693,15 @@ function createGame() {
         break;
 
       case 'GAME_OVER':
-        if (input.anyPressed) { score = 0; defScore = 0; phase = 'MENU'; }
+        // Notify the tournament manager (or, standalone, offer a restart)
+        if (input.anyPressed && !matchEndSent) {
+          matchEndSent = true;
+          if (onMatchEnd) {
+            onMatchEnd({ myScore: score, oppScore: defScore, won: score > defScore });
+          } else {
+            score = 0; defScore = 0; phase = 'MENU';
+          }
+        }
         break;
     }
 
@@ -856,11 +903,11 @@ function createGame() {
         // All steps succeeded — opponent scores!
         defScore++;
         // oppAdvanceSpot stays null → resetPoint does the fresh line-up
-        const over = defScore >= CONFIG.SCORE.WIN ? '  Game Over.' : '';
+        const over = defScore >= matchTarget ? '  Game Over.' : '';
         message = `Opponent scores!  ${score}-${defScore}.${over}`;
         messageTimer = 2.5;
         oppState = null;
-        if (defScore >= CONFIG.SCORE.WIN) phase = 'GAME_OVER';
+        if (defScore >= matchTarget) phase = 'GAME_OVER';
         return;
       }
 
@@ -881,11 +928,11 @@ function createGame() {
           Math.random() < OPP_CALLAHAN_CHANCE) {
         score++;
         oppAdvanceSpot = GF.SCORE_RESET_YARD;
-        const over = score >= CONFIG.SCORE.WIN ? '  Game Over.' : '';
+        const over = score >= matchTarget ? '  Game Over.' : '';
         message = `CALLAHAN! You score!  ${score}-${defScore}.${over}`;
         messageTimer = 2.5;
         oppState = null;
-        if (score >= CONFIG.SCORE.WIN) phase = 'GAME_OVER';
+        if (score >= matchTarget) phase = 'GAME_OVER';
         return;
       }
       // Stopped them in our own end zone? Take the disc at the goal line,
@@ -948,6 +995,9 @@ function createGame() {
     return {
       phase,
       camera: { x: camera.x },
+      teams,
+      matchTag,
+      tournamentLabel,
       thrower,
       cutters: cutterInfos,
       defenders: defenders.map(d => ({ x: d.x, y: d.y, moving: !!d.moving, facing: d.facing, targetCutter: d.targetCutter })),
@@ -956,7 +1006,7 @@ function createGame() {
       stallRaw: stallCount,
       score,
       defScore,
-      targetScore: CONFIG.SCORE.WIN,
+      targetScore: matchTarget,
       message,
       messageTimer,
       wind,
@@ -968,5 +1018,5 @@ function createGame() {
     };
   }
 
-  return { init, update, getState, curveType: () => curveType, setCurve: t => { curveType = t; } };
+  return { init, update, getState, startMatch, curveType: () => curveType, setCurve: t => { curveType = t; } };
 }
