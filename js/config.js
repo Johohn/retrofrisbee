@@ -44,14 +44,26 @@ const CONFIG = {
     INTERCEPT_FLIGHT_RADIUS: 14,
   },
 
+  // ── Point setup (bands measured downfield of the disc pickup spot) ──
+  // Goal-line pickup (start of game / after opponent scores = x 300):
+  // cutters 300..600 (end line → brick mark), defenders 600..825 (brick mark
+  // → centre). Deep pickups shift the bands with the disc.
+  SETUP: {
+    CUTTER_MIN: 0,          // px downfield of the pickup spot
+    CUTTER_MAX: 300,        // brick-mark distance
+    DEFENDER_MIN: 300,      // brick mark
+    DEFENDER_MAX: 525,      // centre of the field (825 from the goal line)
+    Y_PAD: 25,              // y-margin kept clear of the sidelines
+  },
+
   // ── Disc / Throwing ──
   DISC: {
     RADIUS: 5,
     SPEED_MIN: 120,
-    SPEED_MAX: 280,
-    CURVE_ACCEL: 400,       // px/s²  perpendicular acceleration
+    SPEED_MAX: 500,
+    CURVE_ACCEL: 500,       // px/s²  perpendicular acceleration
     CURVE_DECAY_TIME: 1.5,  // seconds until the curve force has fully faded
-    GRAVITY: 400,          // px/s²  z-axis fall
+    GRAVITY: 300,          // px/s²  z-axis fall
     Z_VELOCITY: 80,        // initial z velocity at full power
     CATCH_RADIUS: 25,
     AIR_RESISTANCE: 0.997, // velocity multiplier per (normalised) frame

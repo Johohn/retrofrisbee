@@ -79,49 +79,82 @@ function createGame() {
   }
 
   // ── Reset for a new point ──
-  function resetPoint(startX) {
+  // `freshSetup` = start of the game or after the opponent scored: the
+  // thrower stands on his goal line, cutters line up between the end line
+  // and the brick mark, and the defenders start between the brick mark and
+  // centre (all bands measured from the disc — see CONFIG.SETUP), running
+  // back to their men. A turnover pickup instead keeps everyone near the
+  // disc spot.
+  function resetPoint(startX, freshSetup) {
     const cx = startX || GF.SCORE_RESET_YARD;
     // Random y across the field — anywhere between the sidelines (25px margin)
-    const yPad = 25;
-    const cy = GF.FIELD_TOP + yPad + Math.random() * (GF.FIELD_BOTTOM - GF.FIELD_TOP - yPad * 2);
+    const yPad = CONFIG.SETUP.Y_PAD;
+    const yMin = GF.FIELD_TOP + yPad;
+    const yMax = GF.FIELD_BOTTOM - yPad;
+    const cy = yMin + Math.random() * (yMax - yMin);
+    // Never spawn into / past the opponent end zone on deep pickups
+    const downfieldCap = GF.TOTAL_W - GF.END_ZONE_W - 20;
 
     thrower = { x: cx, y: cy, id: C_CUT.COUNT + 1 };
     disc = null;
     stallCount = 0;
     routePreviewPaths = [];
 
-    // Spread cutters across the field ahead of the thrower, then assign each
-    // a different long route and show every route preview once.
-    const spread = [
-      { x: cx + 50,  y: cy - 50 },
-      { x: cx + 85,  y: cy + 15 },
-      { x: cx + 40,  y: cy + 70 },
-    ];
+    const S = CONFIG.SETUP;
     cutters = [];
     handsStats = [];
-    for (let i = 0; i < C_CUT.COUNT; i++) {
-      const sp = spread[i];
-      handsStats.push(0.60 + Math.random() * 0.35);
-      cutters.push({
-        x: sp.x,
-        y: clamp(sp.y, GF.FIELD_TOP + 15, GF.FIELD_BOTTOM - 15),
-        id: i + 1,         // stable O-label across possessions
-        path: [], wpIdx: 0, flashTimer: 0, preview: null,
-        facing: 'right',   // sprite sheet faces right; flipped frames run left
-      });
+
+    if (freshSetup) {
+      // Cutters between the own end zone line and the brick mark
+      const cutterXMax = Math.min(cx + S.CUTTER_MAX, downfieldCap);
+      for (let i = 0; i < C_CUT.COUNT; i++) {
+        handsStats.push(0.60 + Math.random() * 0.35);
+        cutters.push({
+          x: cx + S.CUTTER_MIN + Math.random() * (cutterXMax - (cx + S.CUTTER_MIN)),
+          y: yMin + Math.random() * (yMax - yMin),
+          id: i + 1,         // stable O-label across possessions
+          path: [], wpIdx: 0, flashTimer: 0, preview: null,
+          facing: 'right',   // sprite sheet faces right; flipped frames run left
+        });
+      }
+    } else {
+      // Turnover pickup: spread cutters just ahead of the thrower
+      const spread = [
+        { x: cx + 50,  y: cy - 50 },
+        { x: cx + 85,  y: cy + 15 },
+        { x: cx + 40,  y: cy + 70 },
+      ];
+      for (let i = 0; i < C_CUT.COUNT; i++) {
+        const sp = spread[i];
+        handsStats.push(0.60 + Math.random() * 0.35);
+        cutters.push({
+          x: sp.x,
+          y: clamp(sp.y, GF.FIELD_TOP + 15, GF.FIELD_BOTTOM - 15),
+          id: i + 1,         // stable O-label across possessions
+          path: [], wpIdx: 0, flashTimer: 0, preview: null,
+          facing: 'right',   // sprite sheet faces right; flipped frames run left
+        });
+      }
     }
     assignRoutes(cx, cy);
 
     // Defenders — one per cutter, plus one mark for the thrower
-    // (targetCutter = -1 means "marking the thrower")
+    // (targetCutter = -1 means "marking the thrower"). On a fresh line-up
+    // they all start between the brick mark and the centre, downfield of
+    // the cutters, then run back to their assignment in movePlayers.
+    const defXMin = Math.min(cx + S.DEFENDER_MIN, downfieldCap);
+    const defXMax = Math.min(cx + S.DEFENDER_MAX, downfieldCap);
     defenders = [];
     for (let i = 0; i < C_DEF.COUNT; i++) {
       const c = cutters[i];
-      const isMark = !c;
       defenders.push({
-        x: (isMark ? thrower.x + C_MARK.STAND_DISTANCE : c.x + 10),
-        y: (isMark ? thrower.y : c.y),
-        targetCutter: isMark ? -1 : i,
+        x: freshSetup
+          ? defXMin + Math.random() * (defXMax - defXMin)
+          : (c ? c.x + 10 : thrower.x + C_MARK.STAND_DISTANCE),
+        y: freshSetup
+          ? yMin + Math.random() * (yMax - yMin)
+          : (c ? c.y : thrower.y),
+        targetCutter: c ? i : -1,
         reactionTimer: 0,
         facing: 'right',
       });
@@ -168,7 +201,9 @@ function createGame() {
         // catch moves the thrower — otherwise he holds his spot.
         const markX = thrower.x + C_MARK.STAND_DISTANCE;
         const markY = thrower.y;
-        if (dist(d.x, d.y, markX, markY) > 2) {
+        // Stall gating: the count only runs while the marker is on his spot
+        d.inPosition = dist(d.x, d.y, markX, markY) <= 2;
+        if (!d.inPosition) {
           const dir = norm(markX - d.x, markY - d.y);
           d.x += dir.x * C_DEF.SPEED * dt;
           d.y += dir.y * C_DEF.SPEED * dt;
@@ -655,11 +690,16 @@ function createGame() {
       curveType = CURVE_ORDER[next];
     }
 
-    // Stall count
-    stallCount += dt;
-    if (stallCount >= CONFIG.STALL.COUNT) {
-      showResult('Stall — Turnover', thrower.x);
-      return;
+    // Stall count — only while the marker is on his marking spot (before
+    // that the thrower is not being marked yet). No marker at all → count
+    // unconditionally, as before.
+    const marker = defenders.find(d => d.targetCutter < 0);
+    if (!marker || marker.inPosition) {
+      stallCount += dt;
+      if (stallCount >= CONFIG.STALL.COUNT) {
+        showResult('Stall — Turnover', thrower.x);
+        return;
+      }
     }
 
     // Move players
@@ -815,7 +855,7 @@ function createGame() {
       if (res.success && oppState.step >= oppState.results.length) {
         // All steps succeeded — opponent scores!
         defScore++;
-        oppAdvanceSpot = GF.SCORE_RESET_YARD;
+        // oppAdvanceSpot stays null → resetPoint does the fresh line-up
         const over = defScore >= CONFIG.SCORE.WIN ? '  Game Over.' : '';
         message = `Opponent scores!  ${score}-${defScore}.${over}`;
         messageTimer = 2.5;
@@ -867,9 +907,13 @@ function createGame() {
     }
 
     // ── Normal reset (score, fallback) ──
+    // Fresh line-up only when there is no turnover spot: start of the game
+    // (coin toss) or after the opponent scored. A turnover pickup keeps the
+    // players where they are.
     const spot = oppAdvanceSpot !== null ? oppAdvanceSpot : GF.SCORE_RESET_YARD;
+    const fresh = oppAdvanceSpot === null;
     oppAdvanceSpot = null;
-    resetPoint(spot);
+    resetPoint(spot, fresh);
   }
 
   // ── Produce renderable state snapshot ──
