@@ -49,6 +49,7 @@ function createGame() {
   let messageTimer = 0;
   let oppAdvanceSpot = null;  // where the player gets the disc after an opponent advance
   let oppState = null;         // { zoneLabel, results[], resultIdx } for stepped messages
+  let defenseView = false;     // true while the opponent's possession is narrated — our players are hidden
 
   // ── Match context (set by the tournament manager via startMatch) ──
   let teams = { my: 'You', opp: 'OPP' };
@@ -119,6 +120,7 @@ function createGame() {
     defScore = 0;
     oppState = null;
     oppAdvanceSpot = null;
+    defenseView = false;
     cutters = []; defenders = []; disc = null;
     thrower = { x: -100, y: -100, id: C_CUT.COUNT + 1 };
     wind = 10 + Math.random() * 15;
@@ -139,6 +141,7 @@ function createGame() {
   // disc spot.
   function resetPoint(startX, freshSetup) {
     const cx = startX || GF.SCORE_RESET_YARD;
+    defenseView = false;   // our possession lines up — players visible again
     // Random y across the field — anywhere between the sidelines (25px margin)
     const yPad = CONFIG.SETUP.Y_PAD;
     const yMin = GF.FIELD_TOP + yPad;
@@ -188,7 +191,7 @@ function createGame() {
         });
       }
     }
-    assignRoutes(cx, cy);
+    assignRoutes(cy);
 
     // Defenders — one per cutter, plus one mark for the thrower
     // (targetCutter = -1 means "marking the thrower"). On a fresh line-up
@@ -216,8 +219,9 @@ function createGame() {
   }
 
   // ── Move all players (cutters + defenders) ──
-  // Cutters run their assigned route for this possession. If the disc comes
-  // near, they abandon the route and run toward the disc (CHASE_DISC.RADIUS).
+  // Cutters run their assigned route, then keep going on situational
+  // re-cuts (planNextCut inside moveAlongPath). If the disc comes near, they
+  // abandon the route and run toward the disc (CHASE_DISC.RADIUS).
   // A player counts as moving only when they were actually displaced this
   // frame — pushing against a field edge or sitting on the disc spot must
   // not play the run animation.
@@ -287,11 +291,14 @@ function createGame() {
   }
 
   // ── Route assignment (once per possession) ──
-  // Every cutter runs the same shape: one straight leg in a cardinal
-  // direction, a cut, then a second cardinal leg they keep following until a
-  // new thrower is established (it runs on to the field edge). One route is
-  // deep, one comes back under, one is flexible — so the cuts spread over
-  // the field instead of everyone striking into the same space.
+  // Every cutter opens with a template: one straight leg in a cardinal
+  // direction, a cut, then a second straight leg. Which template they get
+  // depends on where they stand relative to the thrower — cutters already
+  // deep get under routes that bring them back into reach, cutters well
+  // behind get deep routes into the play, and level cutters rotate the
+  // deep / under / flex buckets so a fresh possession always shows one of
+  // each. When the route ends, the cutter keeps going on situational
+  // re-cuts (see planNextCut) — a cutter never stands still.
   const COMPASS = {
     N:  { x: 0, y: -1 },          S:  { x: 0, y: 1 },
     E:  { x: 1, y: 0 },           W:  { x: -1, y: 0 },
@@ -318,48 +325,119 @@ function createGame() {
     return { x: fromX + d.x * t, y: fromY + d.y * t };
   }
 
-  function assignRoutes(tx, ty) {
+  // Legs of a cutter's route from their current position: one straight
+  // cardinal leg in the template's first direction, then the template's
+  // second leg (truncated where it runs into the field margins). N/S
+  // components are mirrored for cutters below the thrower.
+  function legsFor(c, ty, tpl) {
     const R = CONFIG.ROUTES;
-    const shuffled = [...R.TEMPLATES].sort(() => Math.random() - 0.5);
+    const side = c.y <= ty ? 1 : -1;
+    const d1Name = side === 1 ? tpl.first : MIRROR_Y[tpl.first];
+    const d2Name = side === 1 ? tpl.then : MIRROR_Y[tpl.then];
+    const len1 = lerp(tpl.firstLen[0], tpl.firstLen[1], Math.random());
+    const cutPt = legEnd(c.x, c.y, d1Name, len1);
+    const endPt = legEnd(cutPt.x, cutPt.y, d2Name, R.THEN_LENGTH);
+    c.lastDir = d2Name;   // re-cuts shouldn't retrace the leg this route ends on
+    return [cutPt, endPt];
+  }
 
-    // Variety by bucket: one deep, one under, then anything left
-    const picks = [];
-    for (const kind of ['deep', 'under']) {
-      const t = shuffled.find(tpl => tpl.kind === kind && !picks.includes(tpl));
-      if (t) picks.push(t);
-    }
-    for (const t of shuffled) {
-      if (picks.length >= cutters.length) break;
-      if (!picks.includes(t)) picks.push(t);
-    }
-    while (picks.length < cutters.length) picks.push(shuffled[picks.length % shuffled.length]);
-    picks.sort(() => Math.random() - 0.5); // de-couple route from field side
+  // Where this cutter stands relative to the thrower. Deep cutters (in or
+  // near the end zone, or well past the thrower) need to come back into
+  // reach; cutters well behind the play need to push forward into it.
+  function situationOf(c) {
+    const R = CONFIG.ROUTES;
+    const depth = c.x - thrower.x;
+    const redZoneX = GF.TOTAL_W - GF.END_ZONE_W - 120;
+    if (c.x > redZoneX || depth > R.DEEP_DEPTH) return 'deep';
+    if (depth < R.BEHIND_DEPTH) return 'behind';
+    return 'level';
+  }
+
+  function assignRoutes(ty) {
+    const R = CONFIG.ROUTES;
+    const pool = [...R.TEMPLATES];
+    const KIND_CYCLE = ['flex', 'deep', 'under'];
 
     for (let i = 0; i < cutters.length; i++) {
       const c = cutters[i];
-      const tpl = picks[i % picks.length];
-      // Mirror to the cutter's actual side of the thrower — a cutter below
-      // runs the mirrored (S-ish) version of a top-half template
-      const side = c.y <= ty ? 1 : -1;
-      const d1Name = side === 1 ? tpl.first : MIRROR_Y[tpl.first];
-      const d2Name = side === 1 ? tpl.then : MIRROR_Y[tpl.then];
-      const len1 = lerp(tpl.firstLen[0], tpl.firstLen[1], Math.random());
-      const cutPt = legEnd(c.x, c.y, d1Name, len1);
-      const endPt = legEnd(cutPt.x, cutPt.y, d2Name, R.THEN_LENGTH);
+      // Situation first: deep/behind cutters get the bucket that brings them
+      // back into reach; level cutters rotate the buckets so a fresh
+      // possession always shows a deep, an under and a flex route.
+      const sit = situationOf(c);
+      const wanted = sit === 'deep' ? 'under'
+        : sit === 'behind' ? 'deep'
+        : KIND_CYCLE[i % KIND_CYCLE.length];
+      // A template only fits if its first leg actually goes somewhere from
+      // this cutter's spot (a N leg against the top sideline is a dead leg).
+      const viable = pool.filter(tpl => {
+        const side = c.y <= ty ? 1 : -1;
+        const d1 = side === 1 ? tpl.first : MIRROR_Y[tpl.first];
+        const probe = legEnd(c.x, c.y, d1, tpl.firstLen[0]);
+        return dist(c.x, c.y, probe.x, probe.y) >= 60;
+      });
+      let pickFrom = viable.filter(tpl => tpl.kind === wanted);
+      if (!pickFrom.length) pickFrom = viable.length ? viable : pool;
+      const tpl = pickFrom[Math.floor(Math.random() * pickFrom.length)];
+      if (!tpl) continue;
+      pool.splice(pool.indexOf(tpl), 1);
 
-      c.path = [cutPt, endPt];
+      c.path = legsFor(c, ty, tpl);
       c.wpIdx = 0;
-      c.preview = [{ x: c.x, y: c.y }, cutPt, endPt];
+      c.preview = [{ x: c.x, y: c.y }, ...c.path];
       c.flashTimer = R.SHOW_DURATION;
     }
   }
 
-  // Walk along the current route waypoints. When the route is done, the
-  // cutter holds that spot (their second leg already ran to the field edge,
-  // so there is nowhere left to cut). Whether the cutter is actually running
-  // is derived from displacement in movePlayers.
+  // ── Re-cuts ──
+  // A finished route (or finished re-cut) is replaced by a fresh straight
+  // sprint chosen from the situation on the pitch: a deep cutter cuts back
+  // into the thrower's reach, a cutter well behind pushes forward into the
+  // play, and a cutter in the pocket keeps flowing downfield with some
+  // lateral variety. Every candidate direction is straight (compass),
+  // truncated by the field margins — never into the out of bounds.
+  function planNextCut(c) {
+    const R = CONFIG.ROUTES;
+    const sit = situationOf(c);
+    let best = null;
+    let fallback = null;   // roomiest direction, for a corner-pinned cutter
+
+    for (const name in COMPASS) {
+      const d = COMPASS[name];
+      const probe = legEnd(c.x, c.y, name, R.RECUT_LEN[1]);
+      const room = dist(c.x, c.y, probe.x, probe.y);
+      if (!fallback || room > fallback.room) fallback = { name, d, room };
+      if (room < R.RECUT_MIN_ROOM) continue;
+
+      let score;
+      if (sit === 'deep')        score = -d.x * 130 + Math.abs(d.y) * 10 + Math.random() * 40;
+      else if (sit === 'behind') score =  d.x * 130 + Math.abs(d.y) * 10 + Math.random() * 40;
+      else                       score =  d.x * 55  + Math.abs(d.y) * 12 + Math.random() * 60;
+      if (name === c.lastDir) score -= 120;   // don't retrace the leg just ran
+
+      // Keep the shape of the offense: don't converge on a teammate, and
+      // don't finish standing on the thrower
+      const endX = c.x + d.x * room, endY = c.y + d.y * room;
+      for (const o of cutters) {
+        if (o !== c && dist(endX, endY, o.x, o.y) < R.SPREAD_DIST) score -= 50;
+      }
+      if (dist(endX, endY, thrower.x, thrower.y) < 40) score -= 30;
+
+      if (!best || score > best.score) best = { name, d, room, score };
+    }
+
+    const pick = best || fallback;
+    const len = Math.min(pick.room, lerp(R.RECUT_LEN[0], R.RECUT_LEN[1], Math.random()));
+    c.path = [{ x: c.x + pick.d.x * len, y: c.y + pick.d.y * len }];
+    c.wpIdx = 0;
+    c.lastDir = pick.name;
+  }
+
+  // Walk along the current route waypoints. When they run out (route or re-cut
+  // finished) the cutter immediately plans a fresh straight sprint — see
+  // planNextCut — so a cutter never stands still. Whether the cutter is
+  // actually running is derived from displacement in movePlayers.
   function moveAlongPath(c, dt, speed) {
-    if (c.wpIdx >= c.path.length) return;
+    if (c.wpIdx >= c.path.length) planNextCut(c);
     const wp = c.path[c.wpIdx];
     const d = dist(c.x, c.y, wp.x, wp.y);
     if (d < 8) {
@@ -398,9 +476,26 @@ function createGame() {
     return spd;
   }
 
+  // X where the segment (x0,y0) → (x1,y1) leaves the playing-field rectangle
+  // (x0,y0) is inside; (x1,y1) is the first sub-step position outside it, so
+  // the crossing is over a sideline or end line. Used for the out-of-bounds
+  // turnover spot.
+  function fieldExitX(x0, y0, x1, y1) {
+    const dx = x1 - x0, dy = y1 - y0;
+    let t = 1;
+    if (x1 < 0 || x1 > GF.TOTAL_W) {
+      const tx = x1 < 0 ? -x0 / dx : (GF.TOTAL_W - x0) / dx;
+      if (tx >= 0) t = Math.min(t, tx);
+    }
+    if (y1 < GF.FIELD_TOP || y1 > GF.FIELD_BOTTOM) {
+      const ty = y1 < GF.FIELD_TOP ? (GF.FIELD_TOP - y0) / dy : (GF.FIELD_BOTTOM - y0) / dy;
+      if (ty >= 0) t = Math.min(t, ty);
+    }
+    return x0 + dx * clamp(t, 0, 1);
+  }
+
   // Simulate a flight and return its path points (no z — previews are 2-D).
-  function simulateFlight(startX, startY, heading, speed, curveAccel, windF, steps, stepDt) {
-    const d = {
+  function simulateFlight(startX, startY, heading, speed, curveAccel, windF, steps, stepDt) {    const d = {
       x: startX, y: startY, age: 0,
       vx: Math.cos(heading) * speed,
       vy: Math.sin(heading) * speed,
@@ -508,7 +603,20 @@ function createGame() {
       callahanRisk: false,
       ...(extra || {}),
     };
+    // The field follows the action: center the view on the zone the
+    // opponent starts their advance from, and hide our players — the
+    // narration plays on an empty field.
+    defenseView = true;
+    centerOnZone(OPP_ZONES[startIdx]);
   }
+
+  // ── Camera: center the view on a spot / opponent zone (defense) ──
+  // Defense is narrated zone by zone (RESULT messages); the view pans to
+  // whatever zone the current message is about.
+  function centerOnX(x) {
+    camera.tgtX = clamp(x - GF.VIEWPORT_W / 2, 0, GF.TOTAL_W - GF.VIEWPORT_W);
+  }
+  function centerOnZone(z) { centerOnX((z.minX + z.maxX) / 2); }
 
   // ── Show a result message then wait ──
   function showResult(msg, turnoverX) {
@@ -520,6 +628,7 @@ function createGame() {
         const over = defScore >= matchTarget ? '  Game Over.' : '';
         message = `CALLAHAN! Opponent scores.  ${score}-${defScore}.${over}`;
         messageTimer = 2.5;
+        centerOnZone(OPP_ZONES[0]);
         oppState = null;
         disc = null;
         phase = defScore >= matchTarget ? 'GAME_OVER' : 'RESULT';
@@ -538,6 +647,8 @@ function createGame() {
         };
         message = `${msg}.  OPP on our goal line.`;
         messageTimer = 2.0;
+        defenseView = true;
+        centerOnZone(OPP_ZONES[0]);
         phase = 'RESULT';
         disc = null;
         return;
@@ -589,7 +700,9 @@ function createGame() {
       const dd = dist(d.x, d.y, disc.x, disc.y);
       const radius = d.targetCutter < 0 ? C_MARK.INTERCEPT_RADIUS : C_DEF.INTERCEPT_RADIUS;
       if (dd < radius && Math.random() < 0.40 * OPP_FACTOR()) {
-        showResult('Intercepted!', disc.x);
+        // Turnover spot = the intercepting defender's position (decides
+        // Callahans and where the opponent picks up)
+        showResult('Intercepted!', d.x);
         return;
       }
     }
@@ -610,8 +723,9 @@ function createGame() {
     chance = clamp(chance, 0.05, 0.98);
 
     if (Math.random() < chance) {
-      // Caught!
-      if (disc.x > GF.TOTAL_W - GF.END_ZONE_W) {
+      // Caught! A point counts only when the CATCHER is in the end zone —
+      // the disc can land short of the line while the player crosses it.
+      if (best.x > GF.TOTAL_W - GF.END_ZONE_W) {
         // Score! The conceding team takes the next possession.
         score++;
         disc = null;
@@ -620,11 +734,14 @@ function createGame() {
           messageTimer = 3.0;
           phase = 'GAME_OVER';
         } else {
-          // You scored — opponent starts on offense in their back-field
-          message = `SCORE!  You ${score} - OPP ${defScore}.  OPP ball.`;
+          // You scored — opponent starts on offense in their back-field.
+          // The start zone gets its own message before the advance rolls.
+          message = `SCORE!  You ${score} - OPP ${defScore}.`;
           messageTimer = 2.0;
           phase = 'RESULT';
-          setupOppAdvance(OPP_ZONES.length - 1);
+          setupOppAdvance(OPP_ZONES.length - 1, {
+            announceNext: `OPP starts in the ${OPP_ZONES[OPP_ZONES.length - 1].label}.`,
+          });
         }
       } else {
         // Complete — receiver becomes thrower. The old thrower rejoins as a
@@ -643,7 +760,7 @@ function createGame() {
 
         // New thrower → everyone re-routes relative to the new spot and
         // shows their route preview once for this possession
-        assignRoutes(thrower.x, thrower.y);
+        assignRoutes(thrower.y);
 
         // Reassign defenders by identity: the new thrower's defender becomes
         // the marker; the previous marker takes over his man (the old
@@ -815,6 +932,14 @@ function createGame() {
       disc.prevX = disc.x;
       disc.prevY = disc.y;
       spd = stepDiscFlight(disc, disc.curveAccel, wind, C_DSC.SIM_STEP);
+      // First sub-step that leaves the playing field: record the crossing
+      // point. An out-of-bounds turnover is taken from there — not from
+      // where the disc finally settles.
+      if (disc.oobX === undefined &&
+          (disc.x < 0 || disc.x > GF.TOTAL_W ||
+           disc.y < GF.FIELD_TOP || disc.y > GF.FIELD_BOTTOM)) {
+        disc.oobX = fieldExitX(disc.prevX, disc.prevY, disc.x, disc.y);
+      }
     }
 
     // Z-axis arc
@@ -838,8 +963,11 @@ function createGame() {
     camera.tgtX = clamp(camera.tgtX, 0, GF.TOTAL_W - GF.VIEWPORT_W);
 
     // Out of bounds? While airborne the disc may leave the playing field and
-    // curve back in — it only counts as out when it LANDS outside the lines,
-    // or when it strays really far (no realistic way back).
+    // curve back in — it only counts as out once the flight is effectively
+    // over (landed, timed out, or slowed to a crawl) while outside the lines,
+    // or when it strays really far (no realistic way back). The slow/timeout
+    // resolutions below are therefore only reached for in-bounds discs — an
+    // out-of-bounds disc never resolves as a mere 'Incomplete'.
     const m = C_DSC.OOB_HARD_MARGIN;
     const outside =
       disc.x < 0 || disc.x > GF.TOTAL_W ||
@@ -847,8 +975,13 @@ function createGame() {
     const reallyFar =
       disc.x < -m || disc.x > GF.TOTAL_W + m ||
       disc.y < GF.FIELD_TOP - m || disc.y > GF.FIELD_BOTTOM + m;
-    if (reallyFar || (disc.landed && outside)) {
-      showResult('Out of bounds', clamp(disc.x, 20, GF.TOTAL_W - 20));
+    const flightOver =
+      disc.landed || disc.age > 3.5 || (disc.age > 0.8 && spd < 25);
+    if (reallyFar || (outside && flightOver)) {
+      // Take the turnover from where the disc crossed the line (recorded at
+      // the sub-step it left the field); settle position as a fallback
+      const spotX = disc.oobX !== undefined ? disc.oobX : disc.x;
+      showResult('Out of bounds', clamp(spotX, 20, GF.TOTAL_W - 20));
       return;
     }
 
@@ -882,7 +1015,7 @@ function createGame() {
         if (dd < radius &&
             Math.random() < C_DEF.INTERCEPT_FLIGHT_CHANCE &&
             disc.z < 12) {
-          showResult('Intercepted!', disc.x);
+          showResult('Intercepted!', d.x);
           return;
         }
       }
@@ -896,6 +1029,15 @@ function createGame() {
 
     // ── Stepped opponent advance ──
     if (oppState) {
+      // One-time start-zone announcement (e.g. after we scored): show it,
+      // then pick up the advance rolls on the next expiration
+      if (oppState.announceNext) {
+        message = oppState.announceNext;
+        messageTimer = 1.8;
+        oppState.announceNext = null;
+        return;
+      }
+
       const res = oppState.results[oppState.step];
       oppState.step++;
 
@@ -906,18 +1048,20 @@ function createGame() {
         const over = defScore >= matchTarget ? '  Game Over.' : '';
         message = `Opponent scores!  ${score}-${defScore}.${over}`;
         messageTimer = 2.5;
+        centerOnZone(OPP_ZONES[0]);
         oppState = null;
         if (defScore >= matchTarget) phase = 'GAME_OVER';
         return;
       }
 
       if (res.success) {
-        // Advance to the next zone
+        // Advance to the next zone — the view follows them into it
         const zIdx = OPP_ZONES.indexOf(res.zone);
         const nextLabel = zIdx - 1 > 0
           ? OPP_ZONES[zIdx - 1].label : 'scoring position';
         message = `Opponent advances to ${nextLabel}.`;
         messageTimer = 1.5;
+        centerOnZone(OPP_ZONES[Math.max(zIdx - 1, 0)]);
         return;
       }
 
@@ -931,6 +1075,7 @@ function createGame() {
         const over = score >= matchTarget ? '  Game Over.' : '';
         message = `CALLAHAN! You score!  ${score}-${defScore}.${over}`;
         messageTimer = 2.5;
+        centerOnX(GF.TOTAL_W - GF.END_ZONE_W / 2);
         oppState = null;
         if (score >= matchTarget) phase = 'GAME_OVER';
         return;
@@ -949,6 +1094,7 @@ function createGame() {
         message = `Turnover in ${res.zone.label}.  You pick up.`;
       }
       messageTimer = 2.0;
+      centerOnZone(res.zone);
       oppState = null;
       return;
     }
@@ -980,6 +1126,13 @@ function createGame() {
     if (openIdx >= 0) cutterInfos[openIdx].isOpen = true;
     const openReceiver = openIdx >= 0 ? cutters[openIdx] : null;
 
+    // Defense: the opponent's possession is narrated zone by zone on an
+    // empty field — our players (stale from the last possession) stay hidden
+    // until resetPoint lines up the next one
+    const shownCutters = defenseView ? [] : cutterInfos;
+    const shownDefenders = defenseView ? [] : defenders;
+    const shownThrower = defenseView ? { x: -100, y: -100, id: thrower.id } : thrower;
+
     // Disc render state: interpolate between the last two physics sub-steps so
     // the disc glides at the display's refresh rate (logic stays fixed-step).
     let discState = null;
@@ -998,9 +1151,9 @@ function createGame() {
       teams,
       matchTag,
       tournamentLabel,
-      thrower,
-      cutters: cutterInfos,
-      defenders: defenders.map(d => ({ x: d.x, y: d.y, moving: !!d.moving, facing: d.facing, targetCutter: d.targetCutter })),
+      thrower: shownThrower,
+      cutters: shownCutters,
+      defenders: shownDefenders.map(d => ({ x: d.x, y: d.y, moving: !!d.moving, facing: d.facing, targetCutter: d.targetCutter })),
       disc: discState,
       stallCount: Math.min(Math.ceil(stallCount), CONFIG.STALL.COUNT),
       stallRaw: stallCount,
@@ -1011,7 +1164,7 @@ function createGame() {
       messageTimer,
       wind,
       curveType,
-      openReceiver,
+      openReceiver: defenseView ? null : openReceiver,
       windTimer,
       aim: currentAim,  // { targetX, targetY, power, trajectory } or null
       routePreview: routePreviewPaths.length > 0 ? routePreviewPaths : null,

@@ -130,19 +130,32 @@ const CONFIG = {
   // thrower so every route makes sense spatially.
   ROUTES: {
     SHOW_DURATION: 3.0,    // seconds the once-per-possession preview stays up
-    THEN_LENGTH: 800,      // leg-2 length — exceeds the field, runs to the edge
+    THEN_LENGTH: 340,      // leg-2 length — shapes the cut; re-cuts take over after
     SIDE_MARGIN: 20,       // px kept clear of the sidelines / end lines
     TEMPLATES: [
-      // deep — ends up downfield
-      { id: 'DEEP_CROSS',       first: 'NE', firstLen: [260, 340], then: 'E'  },
-      { id: 'SIDELINE_STRETCH', first: 'N',  firstLen: [110, 170], then: 'E'  },
-      // under — comes back across / underneath
-      { id: 'DEEP_THEN_UNDER',  first: 'E',  firstLen: [240, 320], then: 'SW'  },
-      { id: 'UNDER_ACROSS',     first: 'E',  firstLen: [110, 160], then: 'N'  },
-      // flex — possession filler, picked third
-      { id: 'FLUSH_DEEP',       first: 'S',  firstLen: [80, 130],  then: 'NE' },
-      { id: 'IN_CUT',           first: 'SE', firstLen: [180, 240], then: 'W'  },
+      // deep — attack downfield
+      { id: 'DEEP_CROSS',       kind: 'deep',  first: 'NE', firstLen: [260, 340], then: 'E'  },
+      { id: 'SIDELINE_STRETCH', kind: 'deep',  first: 'N',  firstLen: [110, 170], then: 'E'  },
+      { id: 'DEEP_BOMB',        kind: 'deep',  first: 'E',  firstLen: [200, 280], then: 'NE' },
+      { id: 'POST_CORNER',      kind: 'deep',  first: 'NE', firstLen: [150, 220], then: 'SE' },
+      // under — come back into the thrower's reach
+      { id: 'DEEP_THEN_UNDER',  kind: 'under', first: 'E',  firstLen: [240, 320], then: 'SW' },
+      { id: 'COMEBACK',         kind: 'under', first: 'NE', firstLen: [200, 280], then: 'W'  },
+      { id: 'IN_CUT',           kind: 'under', first: 'SE', firstLen: [180, 240], then: 'W'  },
+      { id: 'UNDER_ACROSS',     kind: 'under', first: 'E',  firstLen: [110, 160], then: 'N'  },
+      // flex — spread laterally before attacking
+      { id: 'FLUSH_DEEP',       kind: 'flex',  first: 'S',  firstLen: [80, 130],  then: 'NE' },
+      { id: 'FLUSH_UNDER',      kind: 'flex',  first: 'N',  firstLen: [80, 130],  then: 'SW' },
+      { id: 'LATERAL_DRIVE',    kind: 'flex',  first: 'S',  firstLen: [100, 160], then: 'E'  },
+      { id: 'CROSS_FIELD',      kind: 'flex',  first: 'E',  firstLen: [140, 200], then: 'N'  },
     ],
+    // ── Re-cuts: when a route (or a re-cut) ends, the cutter picks a fresh
+    // straight sprint from the situation on the pitch — never stands still ──
+    RECUT_MIN_ROOM: 90,    // a direction is only considered with this much room
+    RECUT_LEN: [180, 420], // re-cut sprint length before field truncation
+    DEEP_DEPTH: 320,       // this far downfield of the thrower = deep → cut back
+    BEHIND_DEPTH: -90,     // this far behind the thrower = behind → cut forward
+    SPREAD_DIST: 80,       // don't converge on a teammate closer than this
   },
 
   // ── Sprites (offensive players) ──
