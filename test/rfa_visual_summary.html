@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><title>RFA summary visual</title>
+<style>body { background: #222; margin: 8px; } canvas { display: block; }</style>
+</head>
+<body>
+<script>function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }</script>
+<script src="../js/config.js"></script>
+<script src="../js/data.js"></script>
+<script src="../js/schedule.js"></script>
+<script src="../js/manager.js"></script>
+<script src="../js/manager_renderer.js"></script>
+<script>
+let pendingOnEnd = null, matchOpts = null;
+const game = { init() {}, update() {}, startMatch(o) { pendingOnEnd = o.onEnd; matchOpts = o; } };
+try { localStorage.removeItem('retro-frisbee-manager-v2'); } catch (e) {}
+const manager = createManager(game);
+function powerOf(n) { const t = TEAMS.find(t => t.name === n); return t ? t.power : 3; }
+function playMyMatch() {
+  const p = powerOf(FRANCHISE), o = powerOf(matchOpts.oppName);
+  const pWin = clamp(0.5 + (p - o) * 0.08, 0.15, 0.85);
+  const iWin = Math.random() < pWin;
+  const lose = Math.floor(Math.random() * Math.random() * 4);
+  const cb = pendingOnEnd; pendingOnEnd = null;
+  cb(iWin ? { myScore: 5, oppScore: lose } : { myScore: lose, oppScore: 5 });
+}
+function driveTo(cond, maxSteps) {
+  const inp = { justPressed: true };
+  for (let i = 0; i < maxSteps; i++) {
+    manager.update(0.5, inp);
+    if (manager.getState().screen === 'MATCH') playMyMatch();
+    if (cond()) return true;
+  }
+  return false;
+}
+driveTo(() => manager.getState().seasonOver, 50000);
+manager.update(0.5, { justPressed: true }); // WEEK -> SUMMARY
+const c = document.createElement('canvas');
+c.width = 800; c.height = 450;
+createManagerRenderer(c).render(manager.getState());
+document.body.appendChild(c);
+</script>
+</body>
+</html>

@@ -178,6 +178,7 @@ function createGame() {
         { x: cx + 50,  y: cy - 50 },
         { x: cx + 85,  y: cy + 15 },
         { x: cx + 40,  y: cy + 70 },
+        { x: cx + 115, y: cy - 55 },
       ];
       for (let i = 0; i < C_CUT.COUNT; i++) {
         const sp = spread[i];

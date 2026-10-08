@@ -20,16 +20,16 @@ const CONFIG = {
 
   // ── Cutters (offensive players without disc) ──
   CUTTER: {
-    COUNT: 3,
+    COUNT: 4,
     RADIUS: 8,
-    SPEED: 65,            // px / s  (cut speed — field is 1000px now)
+    SPEED: 80,            // px / s  (cut speed — field is 1000px now)
   },
 
   // ── Defenders ──
   DEFENDER: {
-    COUNT: 4,
+    COUNT: 5,             // one per cutter + one marker for the thrower
     RADIUS: 8,
-    SPEED: 55,            // px / s  (slower than cutters)
+    SPEED: 70,            // px / s  (slower than cutters)
     REACTION_DELAY: 0.25,  // seconds before they start tracking
     MARK_DISTANCE: 12,     // how close they try to stay
     INTERCEPT_RADIUS: 18,  // close enough to intercept in resolveCatch

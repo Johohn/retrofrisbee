@@ -1,12 +1,13 @@
 // Retro Frisbee service worker: cache-first so the game works offline.
 // Bump CACHE_VERSION whenever you change game files to force a refresh.
-const CACHE_VERSION = 'retro-frisbee-v1';
+const CACHE_VERSION = 'retro-frisbee-v2';
 const ASSETS = [
   './',
   './index.html',
   './manifest.webmanifest',
   './js/config.js',
   './js/data.js',
+  './js/schedule.js',
   './js/input.js',
   './js/game.js',
   './js/manager.js',

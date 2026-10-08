@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><title>RFA flow test</title></head>
+<body>
+<pre id="out">RUNNING...</pre>
+<script>function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }</script>
+<script src="../js/data.js"></script>
+<script src="../js/schedule.js"></script>
+<script src="../js/manager.js"></script>
+<script>
+const out = [];
+const note = s => out.push(s);
+console.error = (...a) => out.push('console.error: ' + a.join(' '));
+window.onerror = (msg, src, line) => { out.push('WINDOW ERROR: ' + msg + ' @' + line); return true; };
+
+// ── Mock match engine ──
+let pendingOnEnd = null;
+let matchOpts = null;
+const game = {
+  init() {},
+  update() {},
+  startMatch(opts) { pendingOnEnd = opts.onEnd; matchOpts = opts; },
+};
+
+const manager = createManager(game);
+
+function powerOf(name) { const t = TEAMS.find(t => t.name === name); return t ? t.power : 3; }
+
+// ── Drive the manager: one update per loop step; taps on every step ──
+// (tapCooldown gates extra taps, dt=0.5 drains it fast)
+function playMyMatch() {
+  const p = powerOf(FRANCHISE), o = powerOf(matchOpts.oppName);
+  const pWin = clamp(0.5 + (p - o) * 0.08, 0.15, 0.85);
+  const iWin = Math.random() < pWin;
+  const lose = Math.floor(Math.random() * Math.random() * 4);
+  const res = iWin ? { myScore: 5, oppScore: lose } : { myScore: lose, oppScore: 5 };
+  const cb = pendingOnEnd; pendingOnEnd = null;
+  cb(res);
+}
+
+function runSeasonChecks(seasonNo) {
+  const st = manager.getState();
+  note(`--- SEASON ${st.year} (week ${st.week}, ${st.weekLabel}) ---`);
+  // standings: 4 divisions, sizes 6/6/5/5, each row w+l == 12, sum w == 132
+  // (132 regular-season games, every one has a winner)
+  let totalW = 0;
+  if (st.standings.length !== 4) note('FAIL: standings divisions = ' + st.standings.length);
+  st.standings.forEach(d => {
+    d.rows.forEach(r => {
+      if (r.w + r.l !== 12) note(`FAIL: ${r.name} played ${r.w + r.l} games`);
+      totalW += r.w;
+    });
+  });
+  if (totalW !== 132) note('FAIL: total wins ' + totalW + ' != 132');
+  note('standings check: ' + (totalW === 132 ? 'OK (22 teams x 12 games, 132 games)' : 'FAILED'));
+}
+
+function waitFor(cond, label, maxSteps, mgr) {
+  mgr = mgr || manager;
+  const inp = { justPressed: true };
+  const y0 = mgr.getState().year;
+  for (let i = 0; i < maxSteps; i++) {
+    mgr.update(0.5, inp);
+    if (mgr.getState().screen === 'MATCH') playMyMatch();
+    if (cond()) return true;
+    if (i % 2000 === 1999 && mgr.getState().year > y0 + 1) {
+      note(`FAIL: churn detected in '${label}' — year jumped ${y0} -> ${mgr.getState().year} after ${i} steps`);
+      return false;
+    }
+  }
+  note('FAIL: never reached ' + label);
+  return false;
+}
+
+for (let season = 1; season <= 3; season++) {
+  // Play out to the end of the regular season (week index 12 = division semis)
+  if (!waitFor(() => manager.getState().week === 12 && manager.getState().screen !== 'MATCH',
+      'division semis', 50000)) break;
+  runSeasonChecks(season);
+
+  // Week 12: 4 division semifinals
+  let st = manager.getState();
+  note(`Week 12 games: ${st.weekView.games.length} (want 4)` +
+    (st.weekView.games.length !== 4 ? ' FAIL' : ' OK'));
+
+  // Play through division finals
+  if (!waitFor(() => manager.getState().week === 14, 'championship weekend', 50000)) break;
+  st = manager.getState();
+  note(`Week 14 stage 0 games: ${st.weekView.games.length} (want 2)` +
+    (st.weekView.games.length !== 2 ? ' FAIL' : ' OK'));
+
+  // Play the final
+  if (!waitFor(() => manager.getState().seasonOver, 'champion crowned', 50000)) break;
+  st = manager.getState();
+  note(`Week 14 total games: ${st.weekView.games.length} (want 3)` +
+    (st.weekView.games.length !== 3 ? ' FAIL' : ' OK'));
+  note('Champion: ' + st.champion);
+  note('Final record: ' + st.franchiseRecord.w + '-' + st.franchiseRecord.l);
+
+  // Get to SUMMARY
+  if (!waitFor(() => manager.getState().screen === 'SUMMARY' && manager.getState().summary,
+      'summary screen', 5000)) break;
+  const s = manager.getState().summary;
+  note('Summary: year=' + s.year + ' champion=' + s.champion + ' runnerUp=' + s.runnerUp);
+  note('  divWinners: ' + s.divWinners.map(d => d.div + '=' + d.team).join(', '));
+  note('  franchise: ' + s.note + ' (' + s.record.w + '-' + s.record.l + ')');
+  note('  history entries: ' + manager.getState().history.length);
+
+  // One more tap starts the next season
+  const f1 = manager.getState().weekView.games.map(g => g.shortA + '-' + g.shortB).join(',');
+  manager.update(0.5, { justPressed: true });
+  st = manager.getState();
+  if (st.year !== season + 1 || st.week !== 0) note('FAIL: next season state year=' + st.year + ' week=' + st.week);
+  const f2 = st.weekView.games.map(g => g.shortA + '-' + g.shortB).join(',');
+  note('Season ' + st.year + ' started; fixtures changed: ' + (f1 !== f2 ? 'YES (good)' : 'NO (suspicious)'));
+}
+
+// ── Save / load: rebuild the manager mid-season, state must resume ──
+try {
+  localStorage.setItem('rf-test-probe', '1');
+  localStorage.removeItem('rf-test-probe');
+  // Play to week 5 in the current (season 4) career
+  if (waitFor(() => manager.getState().week === 5 && manager.getState().screen !== 'MATCH', 'week 5', 50000)) {
+    const before = manager.getState();
+    const manager2 = createManager(game); // fresh instance = fresh load()
+    const after = manager2.getState();
+    const ok = after.year === before.year && after.week === before.week &&
+      after.weekView.games.length === before.weekView.games.length &&
+      after.franchiseRecord.w === before.franchiseRecord.w;
+    note('Save/load resume: ' + (ok ? 'OK' : 'FAIL') +
+      ` (year ${after.year}, week ${after.week}, record ${after.franchiseRecord.w}-${after.franchiseRecord.l})`);
+    // and the resumed career can still finish the season
+    if (!waitFor(() => manager2.getState().seasonOver, 'resumed season completes', 60000, manager2)) {
+      note('FAIL: resumed season never finished');
+    } else {
+      note('Resumed season completed; champion: ' + manager2.getState().champion);
+    }
+  }
+} catch (e) {
+  note('localStorage unavailable — save/load test skipped (' + e.message + ')');
+}
+
+note('DONE');
+document.getElementById('out').textContent = out.join('\n');
+</script>
+</body>
+</html>

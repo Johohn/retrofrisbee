@@ -1,4 +1,4 @@
-// manager_renderer.js — Draws the manager screens (HUB, bracket, summary)
+// manager_renderer.js — Draws the manager screens (HUB, week, summary)
 // onto the same canvas the match renderer uses.
 
 function createManagerRenderer(canvas) {
@@ -34,9 +34,12 @@ function createManagerRenderer(canvas) {
     if (Math.sin(Date.now() / 500) > -0.2) text(str, x, y, size, color || GOLD, 'center', true);
   }
 
+  function divAbbr(name) {
+    return name === 'RFA' ? 'RFA' : name.slice(0, 3).toUpperCase();
+  }
+
   // ── Background ──
   function drawBackground() {
-    // Retro desktop-ish gradient stripes
     const g = ctx.createLinearGradient(0, 0, 0, H);
     g.addColorStop(0, '#10142a');
     g.addColorStop(1, '#1a1030');
@@ -55,146 +58,178 @@ function createManagerRenderer(canvas) {
   // ── HUB ──
   function drawHub(gs) {
     drawBackground();
+    text(gs.rfaName.toUpperCase(), W / 2, 28, 22, GOLD, 'center', true);
+    text(`Season ${gs.year}  ·  ${gs.weekLabel}  ·  ${gs.franchise}  ·  ${gs.franchiseDivision}`,
+      W / 2, 48, 12, DIM, 'center');
 
-    text('RETRO FRISBEE MANAGER', W / 2, 30, 24, GOLD, 'center', true);
-    text(`Season ${gs.year}  ·  ${gs.franchise}`, W / 2, 52, 13, DIM, 'center');
-
-    // ── Next tournament card ──
-    const nt = gs.nextTournament;
-    panel(20, 72, 360, 108, PANEL_HI);
-    text('NEXT TOURNAMENT', 32, 92, 11, DIM);
-    text(nt.name, 32, 116, 16, GOLD, 'left', true);
-    text(`${nt.month}  ·  ${nt.venue}`, 32, 136, 12, INK);
-    if (gs.nextIsFinals) {
-      text('Season finals — top 4 by season points qualify', 32, 156, 11, DIM);
-      text(`You are rank ${gs.seasonRank} — ${gs.qualifies ? 'QUALIFIED' : 'MISSED OUT'}`,
-        32, 174, 11, gs.qualifies ? GREEN : RED, 'left', true);
-    } else {
-      text(`Teams: 8  ·  Format: game to ${FORMAT.TARGET_SCORE}`, 32, 156, 11, DIM);
-    }
-    blinking('TAP TO ENTER', 200, 196, 13);
-
-    // ── Season standings ──
-    panel(400, 72, 380, 300);
-    text('SEASON STANDINGS', 412, 92, 12, GOLD, 'left', true);
-    text('TEAM          Pts', 560, 92, 11, DIM);
-    gs.standings.forEach((s, i) => {
-      const y = 114 + i * 30;
-      const me = s.name === gs.franchise;
-      if (me) ctx.fillStyle = 'rgba(255,221,68,0.14)', ctx.fillRect(404, y - 13, 372, 26);
-      text(`${String(i + 1).padStart(2)}. ${s.short}`, 412, y, 12, me ? GOLD : INK, 'left', me);
-      text(String(s.pts), 766, y, 12, me ? GOLD : INK, 'right', me);
-    });
-
-    // ── Franchise recent results ──
-    panel(20, 240, 360, 132);
-    text('RECENT RESULTS', 32, 260, 12, GOLD, 'left', true);
-    if (gs.franchiseResults.length === 0) {
-      text('First season — no history yet.', 32, 284, 11, DIM);
-    }
-    gs.franchiseResults.slice().reverse().slice(0, 5).forEach((r, i) => {
-      const y = 282 + i * 18;
-      const col = r.place === 0 ? RED : r.place === 1 ? GOLD : r.place <= 4 ? GREEN : DIM;
-      text(`S${r.year}  ${r.tName}`, 32, y, 11, INK);
-      text(placeLabel(r.place), 368, y, 11, col, 'right', r.place === 0 || r.place <= 4);
-    });
-
-    text('Career: play every match — the bracket runs to 8th place.', W / 2, 408, 11, DIM, 'center');
-  }
-
-  function placeLabel(p) {
-    return p === 0 ? 'DNQ' : p === 1 ? 'CHAMPION' : `${p}${['st','nd','rd'][p-1] || 'th'}`;
-  }
-
-  // ── Bracket screen ──
-  function drawBracket(gs) {
-    drawBackground();
-    const b = gs.bracket;
-    if (!b) return;
-
-    text(b.name.toUpperCase(), W / 2, 26, 18, GOLD, 'center', true);
-    text(`${b.month}  ·  ${b.venue}  ·  Season ${gs.year}  ·  ${gs.franchise}`, W / 2, 44, 11, DIM, 'center');
-
-    // Only stages that actually have matches (the finals use 2 stages, regular
-// tournaments 3) — center the columns that exist
-    const active = [];
-    b.stages.forEach((matches, si) => {
-      if (matches.length > 0) active.push({ matches, stage: si });
-    });
-    const colW = 186, gap = 8, rowH = 84;
-    const x0 = active.length === 3 ? 108 : (W - (active.length * colW + (active.length - 1) * gap)) / 2;
-    const y0 = 62;
-
-    active.forEach((col, ci) => {
-      col.matches.forEach((m, mi) => {
-        const x = x0 + ci * (colW + gap);
-        const y = y0 + mi * rowH;
-        drawMatchCard(x, y, colW, rowH - 8, m, col.stage, b.stage);
+    // ── Division standings, 4 across; the dashed line is the playoff cut ──
+    const pw = 183, gap = 12, x0 = 16, y0 = 62, ph = 232;
+    gs.standings.forEach((d, di) => {
+      const x = x0 + di * (pw + gap);
+      panel(x, y0, pw, ph);
+      text(d.name.toUpperCase(), x + 10, y0 + 20, 11, GOLD, 'left', true);
+      d.rows.forEach((r, ri) => {
+        const y = y0 + 42 + ri * 24;
+        const me = r.name === gs.franchise;
+        if (me) {
+          ctx.fillStyle = 'rgba(255,221,68,0.14)';
+          ctx.fillRect(x + 3, y - 12, pw - 6, 21);
+        }
+        text(`${ri + 1}. ${r.short}`, x + 10, y, 12, me ? GOLD : INK, 'left', me);
+        text(`${r.diff > 0 ? '+' : ''}${r.diff}`, x + pw - 52, y, 10, DIM, 'right');
+        text(`${r.w}-${r.l}`, x + pw - 10, y, 12, me ? GOLD : INK, 'right', me);
       });
+      // playoff cut: top 3 make the postseason
+      const ly = y0 + 42 + 3 * 24 - 8;
+      ctx.strokeStyle = 'rgba(255,221,68,0.55)';
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath();
+      ctx.moveTo(x + 6, ly);
+      ctx.lineTo(x + pw - 6, ly);
+      ctx.stroke();
+      ctx.setLineDash([]);
     });
 
-    // ── Bottom banner: what happens next ──
-    panel(0, H - 46, W, 46, PANEL);
-    const pm = pendingPlayerMatch(gs);
-    const lm = gs.lastMatch;
-
-    if (lm && lmJustPlayed(gs)) {
-      text(`${lm.tag}: ${gs.franchise} ${lm.myScore} - ${lm.oppScore} ${lm.opp}`,
-        W / 2, H - 28, 14, lm.won ? GREEN : RED, 'center', true);
-      blinking(lm.won ? 'TAP TO CONTINUE' : 'TAP TO CONTINUE', W / 2, H - 10, 12);
-    } else if (b.done) {
-      blinking('TOURNAMENT COMPLETE — TAP FOR FINAL RESULTS', W / 2, H - 20, 13);
+    // ── This week / next up ──
+    panel(16, 306, 380, 128, PANEL_HI);
+    text(gs.weekLabel.toUpperCase(), 28, 326, 12, GOLD, 'left', true);
+    const pm = gs.playerMatch;
+    if (gs.seasonOver) {
+      text(`RFA CHAMPIONS: ${gs.champion}`, 28, 354, 13, GOLD, 'left', true);
+      blinking('TAP FOR SEASON SUMMARY', 28, 382, 12);
     } else if (pm) {
-      text(`${pm.tag.toUpperCase()}:  ${gs.franchise} vs ${pm.opp}`, W / 2, H - 28, 14, GOLD, 'center', true);
-      blinking('TAP TO PLAY', W / 2, H - 10, 13);
-    } else if (b.type === 'finals' && !b.hasPlayer) {
-      text('You did not qualify for the finals — spectating', W / 2, H - 28, 12, RED, 'center', true);
-      blinking('TAP TO PLAY OUT THE ROUND', W / 2, H - 10, 12);
+      text(`${gs.franchiseShort}  vs  ${pm.oppShort}`, 28, 354, 14, INK, 'left', true);
+      text(pm.tag, 28, 374, 11, DIM);
+      blinking('TAP TO CONTINUE', 28, 404, 12);
     } else {
-      text('No franchise match this round — CPU matches pending', W / 2, H - 28, 12, DIM, 'center');
-      blinking('TAP TO PLAY OUT THE ROUND', W / 2, H - 10, 12);
+      text('You are not in this round — spectating', 28, 354, 11, DIM);
+      blinking('TAP TO CONTINUE', 28, 382, 12);
     }
+
+    // ── Recent seasons ──
+    panel(416, 306, 368, 128);
+    text('RECENT SEASONS', 428, 326, 12, GOLD, 'left', true);
+    if (gs.history.length === 0) {
+      text('First season — no history yet.', 428, 350, 11, DIM);
+    }
+    gs.history.slice().reverse().slice(0, 5).forEach((r, i) => {
+      const y = 348 + i * 17;
+      const col = r.note.startsWith('RFA CHAMPIONS') ? GOLD
+        : r.note.startsWith('Missed') ? RED : GREEN;
+      text(`S${r.year}  ${r.w}-${r.l}`, 428, y, 11, INK);
+      text(r.note, 772, y, 10, col, 'right', r.note.startsWith('RFA CHAMPIONS'));
+    });
+
+    text('Dashed line = division playoff cut (top 3 make the postseason)',
+      W / 2, H - 8, 10, DIM, 'center');
   }
 
-  function lmJustPlayed(gs) {
-    // The result banner shows only until the next tap advances things
-    return gs.lastMatch && gs.lastMatch._fresh;
+  // ── WEEK screen ──
+  function drawWeek(gs) {
+    drawBackground();
+    const wv = gs.weekView;
+    text(wv.label.toUpperCase(), W / 2, 26, 18, GOLD, 'center', true);
+    text(`Season ${gs.year}  ·  ${gs.franchise}  ·  Record ${gs.franchiseRecord.w}-${gs.franchiseRecord.l}`,
+      W / 2, 44, 11, DIM, 'center');
+
+    if (wv.games.length > 6) drawSlate(gs);
+    else drawPlayoffs(gs);
+
+    drawBanner(gs);
   }
 
-  function pendingPlayerMatch(gs) {
-    if (!gs.bracket || gs.bracket.done) return null;
-    for (const st of gs.bracket.stages) {
-      for (const m of st) {
-        if (!m.played && m.isPlayer) return { tag: m.tag, opp: m.a === gs.franchise ? m.b : m.a };
+  // Regular season: this week's full slate + a peek at next week
+  function drawSlate(gs) {
+    const wv = gs.weekView;
+    panel(16, 56, 424, 336);
+    text('THIS WEEK', 28, 76, 11, GOLD, 'left', true);
+    wv.games.forEach((m, i) => {
+      const y = 96 + i * 27;
+      const me = m.isPlayer;
+      if (me) {
+        ctx.fillStyle = 'rgba(255,221,68,0.14)';
+        ctx.fillRect(20, y - 13, 416, 24);
       }
+      const col = me ? GOLD : INK;
+      text(divAbbr(m.div), 28, y, 10, DIM);
+      text(`${m.shortA} v ${m.shortB}`, 64, y, 12, col, 'left', me);
+      if (m.played) {
+        text(`${m.scoreA}-${m.scoreB}`, 428, y, 12, me ? GOLD : DIM, 'right', me);
+      }
+    });
+
+    if (wv.next) {
+      panel(452, 56, 332, 336);
+      text((wv.next.label + ' — FIXTURES').toUpperCase(), 464, 76, 11, DIM, 'left', true);
+      wv.next.games.forEach((m, i) => {
+        const y = 96 + i * 27;
+        const me = m.shortA === gs.franchiseShort || m.shortB === gs.franchiseShort;
+        text(divAbbr(m.div), 464, y, 10, DIM);
+        text(`${m.shortA} v ${m.shortB}`, 500, y, 12, me ? GOLD : DIM, 'left', me);
+      });
     }
-    return null;
   }
 
-  function drawMatchCard(x, y, w, h, m, stageIdx, curStage) {
-    const isCurrent = !m.played && stageIdx === curStage;
-    const isPlayer = m.isPlayer;
-    panel(x, y, w, h, isPlayer ? PANEL_HI : PANEL);
-    if (isPlayer) {
+  // Postseason: division playoffs / championship weekend as cards
+  function drawPlayoffs(gs) {
+    const games = gs.weekView.games;
+    const cw = 372;
+    if (games.length >= 4) {
+      const pos = [[16, 90], [412, 90], [16, 238], [412, 238]];
+      games.forEach((m, i) => drawGameCard(pos[i][0], pos[i][1], cw, 130, m));
+    } else if (games.length === 3) {
+      drawGameCard(16, 70, cw, 112, games[0]);
+      drawGameCard(412, 70, cw, 112, games[1]);
+      drawGameCard(214, 198, cw, 150, games[2]);
+    } else {
+      games.forEach((m, i) => drawGameCard(16 + i * 396, 120, cw, 150, m));
+    }
+  }
+
+  function drawGameCard(x, y, w, h, m) {
+    panel(x, y, w, h, m.isPlayer ? PANEL_HI : PANEL);
+    if (m.isPlayer && !m.played) {
       ctx.strokeStyle = 'rgba(255,221,68,0.7)';
       ctx.strokeRect(x + 1.5, y + 1.5, w - 3, h - 3);
     }
-    text(m.tag, x + 8, y + 16, 9, isPlayer ? GOLD : DIM, 'left', isPlayer);
-
-    // Team rows
+    text(m.tag, x + 10, y + 18, 10, m.isPlayer ? GOLD : DIM, 'left', m.isPlayer);
+    text(divAbbr(m.div), x + w - 10, y + 18, 10, DIM, 'right');
     const rows = [
       { short: m.shortA, name: m.a, score: m.scoreA },
       { short: m.shortB, name: m.b, score: m.scoreB },
     ];
     rows.forEach((r, i) => {
-      const ry = y + 36 + i * 22;
+      const ry = y + 46 + i * 30;
       const win = m.played && i === (m.scoreA > m.scoreB ? 0 : 1);
-      text(r.short, x + 10, ry, 13, win ? GOLD : INK, 'left', win);
-      text(String(r.score), x + w - 10, ry, 13, win ? GOLD : DIM, 'right', win);
-      if (!m.played && isCurrent && isPlayer) {
-        text('·', x + w - 22, ry, 13, GOLD);
-      }
+      text(r.short, x + 12, ry, 14, win ? GOLD : INK, 'left', win);
+      text(r.name, x + 50, ry, 12, win ? GOLD : INK, 'left', win);
+      text(m.played ? String(r.score) : '–', x + w - 12, ry, 14, win ? GOLD : DIM, 'right', win);
     });
+  }
+
+  function drawBanner(gs) {
+    panel(0, H - 46, W, 46, PANEL);
+    const wv = gs.weekView;
+    const lm = gs.lastMatch;
+    const y1 = H - 27, y2 = H - 10;
+    if (lm && lm._fresh) {
+      text(`${lm.tag}: ${gs.franchiseShort} ${lm.myScore} - ${lm.oppScore} ${lm.oppShort}`,
+        W / 2, y1, 14, lm.won ? GREEN : RED, 'center', true);
+      blinking('TAP TO CONTINUE', W / 2, y2, 12);
+    } else if (gs.seasonOver) {
+      text(`RFA CHAMPIONS: ${gs.champion}`, W / 2, y1, 15, GOLD, 'center', true);
+      blinking('TAP FOR SEASON SUMMARY', W / 2, y2, 12);
+    } else if (wv.complete) {
+      text(wv.label.toUpperCase() + ' COMPLETE', W / 2, y1, 13, INK, 'center', true);
+      blinking('TAP TO CONTINUE', W / 2, y2, 13);
+    } else if (gs.playerMatch) {
+      text(`${gs.playerMatch.tag.toUpperCase()}:  ${gs.franchise} vs ${gs.playerMatch.opp}`,
+        W / 2, y1, 14, GOLD, 'center', true);
+      blinking('TAP TO PLAY', W / 2, y2, 13);
+    } else {
+      text('No franchise match this round — spectating', W / 2, y1, 12, DIM, 'center');
+      blinking('TAP TO PLAY OUT THE ROUND', W / 2, y2, 12);
+    }
   }
 
   // ── Summary screen ──
@@ -203,42 +238,34 @@ function createManagerRenderer(canvas) {
     const s = gs.summary;
     if (!s) return;
 
-    text(s.name.toUpperCase(), W / 2, 30, 20, GOLD, 'center', true);
-    text('FINAL RESULTS', W / 2, 50, 12, DIM, 'center');
+    text(`SEASON ${s.year} — ${gs.rfaName.toUpperCase()}`, W / 2, 30, 14, DIM, 'center', true);
+    text(s.champion.toUpperCase(), W / 2, 80, 34, GOLD, 'center', true);
+    text('RFA CHAMPIONS', W / 2, 104, 14, GOLD, 'center', true);
+    text(`${s.finalScore.aShort} ${s.finalScore.scoreA}  -  ${s.finalScore.scoreB} ${s.finalScore.bShort}`,
+      W / 2, 126, 13, INK, 'center');
 
-    panel(120, 66, 560, 280);
-    s.placements.forEach((p, i) => {
-      const y = 92 + i * 32;
-      const me = p.team === gs.franchise;
-      if (me) ctx.fillStyle = 'rgba(255,221,68,0.16)', ctx.fillRect(124, y - 14, 552, 28);
-      text(`${String(p.place).padStart(2)}.`, 140, y, 13, INK, 'left');
-      text(p.team, 170, y, 13, me ? GOLD : INK, 'left', me);
-      text(`+${p.points} pts`, 664, y, 12, DIM, 'right');
-      if (p.place === 1) text('CHAMPION', 664, y, 12, GOLD, 'right', true);
-      else if (me) text(placeLabel(p.place), 664, y, 12, GOLD, 'right', true);
+    // Division champions
+    panel(160, 146, 480, 128);
+    text('DIVISION CHAMPIONS', 172, 166, 11, GOLD, 'left', true);
+    s.divWinners.forEach((d, i) => {
+      const y = 190 + i * 20;
+      text(d.div, 172, y, 12, DIM);
+      text(d.team, 250, y, 12, d.team === gs.franchise ? GOLD : INK, 'left', d.team === gs.franchise);
     });
 
-    const myPlace = s.myPlace;
-    const verdict = myPlace === 0
-      ? 'The season ends here — you missed the finals.'
-      : myPlace === 1
-      ? 'CHAMPIONS! An unforgettable weekend.'
-      : myPlace <= 3 ? 'A podium finish — strong showing.'
-      : myPlace <= 6 ? 'Mid-table. Room to grow.'
-      : 'A weekend to forget. Back to practice.';
-    text(verdict, W / 2, 368, 13, myPlace === 1 ? GOLD : INK, 'center', true);
-    if (myPlace > 0) {
-      text(`Your place: ${placeLabel(myPlace)} (+${s.myPoints} pts)`, W / 2, 390, 12, INK, 'center');
-    }
+    // Franchise verdict
+    const champ = s.note.startsWith('RFA CHAMPIONS');
+    text(s.note, W / 2, 312, 14, champ ? GOLD : INK, 'center', true);
+    text(`Regular season: ${s.record.w}-${s.record.l}`, W / 2, 334, 12, DIM, 'center');
 
-    blinking('TAP TO RETURN TO THE MANAGER', W / 2, 424, 12);
+    blinking(`TAP TO START SEASON ${s.year + 1}`, W / 2, 396, 13);
   }
 
   // ── Entry ──
   function render(gs) {
     ctx.clearRect(0, 0, W, H);
     if (gs.screen === 'HUB') drawHub(gs);
-    else if (gs.screen === 'TOURNAMENT') drawBracket(gs);
+    else if (gs.screen === 'WEEK') drawWeek(gs);
     else if (gs.screen === 'SUMMARY') drawSummary(gs);
   }
 

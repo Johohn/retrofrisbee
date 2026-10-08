@@ -1,117 +1,190 @@
-// manager.js — Career mode: seasons of tournaments, 8-team brackets,
-// full placement (1st through 8th), franchise progression.
-// Screens: HUB (season overview) → TOURNAMENT (bracket) → MATCH (the game
-// itself, via game.js) → SUMMARY (tournament result) → back to HUB.
+// manager.js — RFA career mode.
+// 22 teams in 4 divisions (2×6, 2×5). A 12-week regular season where every
+// team plays every week (schedule.js builds the fixtures), then the division
+// playoffs — top 3 per division, seeds 2 vs 3 with the winner facing seed 1 —
+// and Championship Weekend: two semifinals and the RFA Final. No third-place
+// game; the final's winner is RFA champion.
+// Screens: HUB (season overview) → WEEK (this week's schedule) → MATCH (the
+// game itself, via game.js) → back to WEEK → … → SUMMARY (season result).
 
-const SAVE_KEY = 'retro-frisbee-manager-v1';
+const SAVE_KEY = 'retro-frisbee-manager-v2';
 
-// Points awarded per tournament placement (index = place - 1)
-const PLACE_POINTS = [10, 7, 5, 3, 2, 1, 1, 0];
+const REGULAR_WEEKS = 12;   // weeks 0..11 = regular season
+const WEEK_DIV_SF = 12;     // division semifinals (2 vs 3)
+const WEEK_DIV_F = 13;      // division finals (1 vs SF winner)
+const WEEK_CHAMP = 14;      // championship weekend (semis, then the final)
 
 function createManager(game) {
   // ── Persistent career state ──
   let year = 1;
-  let tIdx = 0;                 // which tournament of the season is next (0..3)
-  let standings = {};           // team name → season points
-  let franchiseResults = [];    // [{year, tName, place}] most recent last
+  let week = 0;          // 0..14
+  let champStage = 0;    // championship weekend sub-stage: 0 = semis, 1 = final
+  let schedule = null;   // { weeks: [[{a,b,div,inter}]] } — regular season only
+  let games = [];        // every game (regular season + postseason)
+  let champion = null;   // RFA champion team name once the season is over
+  let history = [];      // franchise season results: {year, w, l, note}
 
   // ── Runtime state ──
-  let screen = 'HUB';           // HUB | TOURNAMENT | MATCH | SUMMARY
-  let tour = null;              // active tournament object (see newTournament)
-  let lastMatch = null;         // { myScore, oppScore, won, oppName } banner on bracket
-  let summary = null;           // tournament-end snapshot for the SUMMARY screen
-  let tapCooldown = 0;          // ignore taps right after a screen change
+  let screen = 'HUB';    // HUB | WEEK | MATCH | SUMMARY
+  let lastMatch = null;  // { myScore, oppScore, won, opp, oppShort, tag, _fresh }
+  let summary = null;    // season-end snapshot for the SUMMARY screen
+  let tapCooldown = 0;   // ignore taps right after a screen change
 
   // ── Team helpers ──
-  function teamByName(name) {
-    return TEAMS.find(t => t.name === name);
-  }
+  function teamByName(name) { return TEAMS.find(t => t.name === name); }
   function teamShort(name) {
     const t = teamByName(name);
     return t ? t.short : name.slice(0, 3).toUpperCase();
+  }
+  function divisionOf(name) {
+    return DIVISIONS.find(d => d.teams.some(t => t.name === name));
   }
 
   // ── Save / load (browser storage; the game still works without it) ──
   function save() {
     try {
       localStorage.setItem(SAVE_KEY, JSON.stringify({
-        year, tIdx, standings, franchiseResults,
+        v: 2, year, week, champStage, schedule, games, champion, history,
       }));
     } catch (e) { /* storage unavailable — career runs in-session only */ }
   }
   function load() {
     try {
       const raw = localStorage.getItem(SAVE_KEY);
-      if (!raw) return;
+      if (!raw) return false;
       const s = JSON.parse(raw);
-      if (typeof s.year === 'number') year = s.year;
-      if (typeof s.tIdx === 'number') tIdx = s.tIdx;
-      if (s.standings) standings = s.standings;
-      if (Array.isArray(s.franchiseResults)) franchiseResults = s.franchiseResults;
-    } catch (e) { /* corrupt or missing save — start fresh */ }
+      if (s.v !== 2 || !s.schedule || !Array.isArray(s.games)) return false;
+      year = s.year || 1;
+      week = s.week || 0;
+      champStage = s.champStage || 0;
+      schedule = s.schedule;
+      games = s.games;
+      champion = s.champion || null;
+      history = Array.isArray(s.history) ? s.history : [];
+      return true;
+    } catch (e) { return false; }
   }
 
-  // ── Tournament construction ──
-  // A match: { id, stage, a, b, scoreA, scoreB, played, isPlayer, tag }
-  // `tag` is a human label ('Quarterfinal', 'Semifinal', 'Final', …).
-  // Stages build lazily: QF → (SF + placement semis) → (Final + 3rd +
-  // 5th + 7th). That leaves every team with one final match and a full
-  // placement 1..8.
-  function newTournament() {
-    const tdef = TOURNAMENTS[tIdx];
-
-    if (tdef.finals) {
-      // ── Season finals (EUCF): top 4 by season points only ──
-      // Seeds 1–4: 1v4 and 2v3 semis, then grand final + 3rd place.
-      const seeds = TEAMS
-        .map(t => ({ name: t.name, pts: standings[t.name] || 0 }))
-        .sort((a, b) => b.pts - a.pts || a.name.localeCompare(b.name))
-        .slice(0, 4);
-      const matches = [
-        {
-          id: 0, stage: 0, a: seeds[0].name, b: seeds[3].name,
-          scoreA: 0, scoreB: 0, played: false, tag: 'Semifinal (1v4)',
-        },
-        {
-          id: 1, stage: 0, a: seeds[1].name, b: seeds[2].name,
-          scoreA: 0, scoreB: 0, played: false, tag: 'Semifinal (2v3)',
-        },
-      ];
-      tour = {
-        name: tdef.name, month: tdef.month, venue: tdef.venue,
-        type: 'finals', stage: 0, matches, done: false, placements: [],
-        qualified: seeds.map(s => s.name),
-      };
-    } else {
-      // ── Regular tournament: full 8-team bracket ──
-      // Random draw each tournament
-      const pool = [...TEAMS].sort(() => Math.random() - 0.5);
-      const matches = [];
-      let id = 0;
-      for (let i = 0; i < 8; i += 2) {
-        matches.push({
-          id: id++, stage: 0, a: pool[i].name, b: pool[i + 1].name,
-          scoreA: 0, scoreB: 0, played: false, tag: 'Quarterfinal',
+  // ── Season setup ──
+  // A game: { id, week, sub, a, b, scoreA, scoreB, played, tag, div, isPlayer }
+  // `sub` only matters on championship weekend (0 = semis, 1 = final).
+  function startSeason() {
+    schedule = createSchedule(DIVISIONS, (year * 7919 + 104729) >>> 0);
+    games = [];
+    schedule.weeks.forEach((list, w) => {
+      for (const g of list) {
+        games.push({
+          id: games.length, week: w, sub: 0, a: g.a, b: g.b,
+          scoreA: 0, scoreB: 0, played: false,
+          tag: g.inter ? 'Interdivisional' : g.div, div: g.inter ? 'RFA' : g.div,
+          isPlayer: g.a === FRANCHISE || g.b === FRANCHISE,
         });
       }
-      tour = {
-        name: tdef.name, month: tdef.month, venue: tdef.venue,
-        type: 'regular', stage: 0, matches, done: false, placements: [],
-      };
-    }
+    });
+    champion = null;
+    champStage = 0;
+    week = 0;
     lastMatch = null;
-    markPlayer();
+    summary = null;
+    save();
   }
 
-  function winner(m) { return m.scoreA > m.scoreB ? m.a : m.b; }
-  function loser(m)  { return m.scoreA > m.scoreB ? m.b : m.a; }
-
-  function markPlayer() {
-    for (const m of tour.matches) {
-      if (!m.played) {
-        m.isPlayer = (m.a === FRANCHISE || m.b === FRANCHISE);
-      }
+  // ── Standings (regular-season games only) ──
+  // Order: wins, then point differential, then points for.
+  function computeStandings() {
+    const tables = DIVISIONS.map(d => ({
+      name: d.name,
+      rows: d.teams.map(t => ({ name: t.name, short: t.short, w: 0, l: 0, pf: 0, pa: 0, diff: 0 })),
+    }));
+    const rowOf = new Map();
+    tables.forEach(t => t.rows.forEach(r => rowOf.set(r.name, r)));
+    for (const g of games) {
+      if (g.week >= REGULAR_WEEKS || !g.played) continue;
+      const ra = rowOf.get(g.a), rb = rowOf.get(g.b);
+      if (!ra || !rb) continue;
+      ra.pf += g.scoreA; ra.pa += g.scoreB;
+      rb.pf += g.scoreB; rb.pa += g.scoreA;
+      if (g.scoreA > g.scoreB) { ra.w++; rb.l++; } else { rb.w++; ra.l++; }
     }
+    for (const t of tables) {
+      for (const r of t.rows) r.diff = r.pf - r.pa;
+      t.rows.sort((x, y) =>
+        y.w - x.w || y.diff - x.diff || y.pf - x.pf || x.name.localeCompare(y.name));
+    }
+    return tables;
+  }
+
+  function franchiseRecord() {
+    let w = 0, l = 0;
+    for (const g of games) {
+      if (g.week >= REGULAR_WEEKS || !g.played) continue;
+      if (g.a !== FRANCHISE && g.b !== FRANCHISE) continue;
+      const my = g.a === FRANCHISE ? g.scoreA : g.scoreB;
+      const opp = g.a === FRANCHISE ? g.scoreB : g.scoreA;
+      if (my > opp) w++; else l++;
+    }
+    return { w, l };
+  }
+
+  // ── Postseason construction (built lazily as each round completes) ──
+  function pushGame(w, sub, a, b, tag, div) {
+    games.push({
+      id: games.length, week: w, sub, a, b, scoreA: 0, scoreB: 0,
+      played: false, tag, div,
+      isPlayer: a === FRANCHISE || b === FRANCHISE,
+    });
+  }
+  function winner(m) { return m.scoreA > m.scoreB ? m.a : m.b; }
+  function loser(m) { return m.scoreA > m.scoreB ? m.b : m.a; }
+
+  function buildDivisionSemis() {
+    for (const t of computeStandings()) {
+      pushGame(WEEK_DIV_SF, 0, t.rows[1].name, t.rows[2].name, 'Division Semifinal', t.name);
+    }
+  }
+  function buildDivisionFinals() {
+    for (const sf of weekGames(WEEK_DIV_SF)) {
+      const table = computeStandings().find(t => t.name === sf.div);
+      pushGame(WEEK_DIV_F, 0, table.rows[0].name, winner(sf), 'Division Final', sf.div);
+    }
+  }
+  function buildChampSemis() {
+    // The 4 division champions, seeded by regular-season record
+    const champs = weekGames(WEEK_DIV_F).map(winner);
+    const order = champs.slice().sort((x, y) => {
+      const rx = seedStats(x), ry = seedStats(y);
+      return ry.w - rx.w || ry.diff - rx.diff || ry.pf - rx.pf || x.localeCompare(y);
+    });
+    pushGame(WEEK_CHAMP, 0, order[0], order[3], 'RFA Semifinal (1v4)', 'RFA');
+    pushGame(WEEK_CHAMP, 0, order[1], order[2], 'RFA Semifinal (2v3)', 'RFA');
+  }
+  function buildChampFinal() {
+    const [s1, s2] = weekGames(WEEK_CHAMP, 0);
+    pushGame(WEEK_CHAMP, 1, winner(s1), winner(s2), 'RFA Final', 'RFA');
+  }
+
+  function seedStats(name) {
+    for (const t of computeStandings()) {
+      const r = t.rows.find(r => r.name === name);
+      if (r) return r;
+    }
+    return { w: 0, diff: 0, pf: 0 };
+  }
+
+  // ── Week helpers ──
+  function weekGames(w, sub) {
+    return games.filter(g => g.week === w && (sub == null || g.sub === sub));
+  }
+  function activeGames() {
+    return week === WEEK_CHAMP ? weekGames(WEEK_CHAMP, champStage) : weekGames(week);
+  }
+  function weekComplete() {
+    const list = activeGames();
+    return list.length > 0 && list.every(g => g.played);
+  }
+  function seasonOver() { return !!champion; }
+  function playerMatch() {
+    return activeGames().find(g => g.isPlayer && !g.played) || null;
   }
 
   // Simulate a CPU match from team power ratings
@@ -119,123 +192,64 @@ function createManager(game) {
     const pa = teamByName(m.a).power, pb = teamByName(m.b).power;
     const pWin = clamp(0.5 + (pa - pb) * 0.08, 0.15, 0.85);
     const aWins = Math.random() < pWin;
-    const winScore = FORMAT.TARGET_SCORE;
     // Loser scores 0..3, weighted toward the low end
     const loseScore = Math.floor(Math.random() * Math.random() * 4);
-    m.scoreA = aWins ? winScore : loseScore;
-    m.scoreB = aWins ? loseScore : winScore;
+    m.scoreA = aWins ? FORMAT.TARGET_SCORE : loseScore;
+    m.scoreB = aWins ? loseScore : FORMAT.TARGET_SCORE;
     m.played = true;
   }
 
-  function stageMatches(stage) { return tour.matches.filter(m => m.stage === stage); }
-  function stageComplete(stage) {
-    return stageMatches(stage).every(m => m.played);
-  }
-
-  // Build the next stage once the current one is fully played
-  function buildNextStage() {
-    const st = tour.stage;
-    const push = (a, b, tag, stage) => tour.matches.push({
-      id: tour.matches.length, stage, a, b,
-      scoreA: 0, scoreB: 0, played: false, tag,
-    });
-
-    if (tour.type === 'finals') {
-      // Semis done → grand final + 3rd place
-      if (st === 0) {
-        const sf = stageMatches(0);
-        push(winner(sf[0]), winner(sf[1]), 'Grand Final (1st–2nd)', 1);
-        push(loser(sf[0]), loser(sf[1]), "3rd Place (3rd–4th)", 1);
-        tour.stage = 1;
+  // ── Advancing ──
+  function advance() {
+    if (week === WEEK_CHAMP) {
+      if (champStage === 0) {
+        buildChampFinal();
+        champStage = 1;
+        return; // stay on championship weekend for the final
       }
-      markPlayer();
+      champion = winner(weekGames(WEEK_CHAMP, 1)[0]);
+      crownSeason();
       return;
     }
-
-    if (st === 0) {
-      // Quarterfinals done → winner semis + placement semis (QF losers play
-      // on for 5th–8th, so nobody's done after one loss)
-      const qf = stageMatches(0);
-      push(winner(qf[0]), winner(qf[1]), 'Semifinal', 1);
-      push(winner(qf[2]), winner(qf[3]), 'Semifinal', 1);
-      push(loser(qf[0]), loser(qf[1]), 'Placement Semi (5th–8th)', 1);
-      push(loser(qf[2]), loser(qf[3]), 'Placement Semi (5th–8th)', 1);
-      tour.stage = 1;
-    } else if (st === 1) {
-      // Semis done → all placement finals. Winner semis (first two of the
-      // stage) feed Final + 3rd place; placement semis feed 5th + 7th.
-      const all = stageMatches(1);
-      const sf1 = all[0], sf2 = all[1], ps1 = all[2], ps2 = all[3];
-      push(winner(sf1), winner(sf2), 'Final (1st–2nd)', 2);
-      push(loser(sf1), loser(sf2), "3rd Place (3rd–4th)", 2);
-      push(winner(ps1), winner(ps2), "5th Place (5th–6th)", 2);
-      push(loser(ps1), loser(ps2), "7th Place (7th–8th)", 2);
-      tour.stage = 2;
-    }
-    markPlayer();
+    week++;
+    if (week === WEEK_DIV_SF) buildDivisionSemis();
+    else if (week === WEEK_DIV_F) buildDivisionFinals();
+    else if (week === WEEK_CHAMP) buildChampSemis();
+    screen = 'HUB';
+    save();
   }
 
-  // ── Tournament end: assign places, update standings, advance calendar ──
-  function finishTournament() {
-    const fin = tour.matches.find(x => x.tag.startsWith(tour.type === 'finals' ? 'Grand' : 'Final'));
-    const third = tour.matches.find(x => x.tag.startsWith('3rd'));
-
-    const places = [];
-    places[winner(fin)] = 1;  places[loser(fin)] = 2;
-    places[winner(third)] = 3; places[loser(third)] = 4;
-
-    if (tour.type === 'finals') {
-      // Four qualified teams only: 1–4 decided, 5–8 unplayed (DNQ teams
-      // already sit out with their season points)
-      tour.placements = tour.qualified.map(name => ({
-        team: name, place: places[name],
-        points: PLACE_POINTS[places[name] - 1],
-      })).sort((x, y) => x.place - y.place);
+  function crownSeason() {
+    const fin = weekGames(WEEK_CHAMP, 1)[0];
+    const rec = franchiseRecord();
+    const ps = games.filter(g => g.isPlayer && g.week >= REGULAR_WEEKS && g.played);
+    let note;
+    if (champion === FRANCHISE) {
+      note = 'RFA CHAMPIONS — an unforgettable run!';
+    } else if (ps.length === 0) {
+      note = 'Missed the playoffs';
     } else {
-      const p5 = tour.matches.find(x => x.tag.startsWith('5th'));
-      const p7 = tour.matches.find(x => x.tag.startsWith('7th'));
-      places[winner(p5)] = 5;    places[loser(p5)] = 6;
-      places[winner(p7)] = 7;    places[loser(p7)] = 8;
-      tour.placements = TEAMS.map(t => ({
-        team: t.name, place: places[t.name],
-        points: PLACE_POINTS[places[t.name] - 1],
-      })).sort((x, y) => x.place - y.place);
+      // The franchise's last postseason game was a loss
+      const lost = ps[ps.length - 1];
+      const round = lost.tag.split(' (')[0].toLowerCase().replace(/^rfa/, 'RFA');
+      note = 'Eliminated in the ' + round;
     }
-
-    for (const p of tour.placements) {
-      standings[p.team] = (standings[p.team] || 0) + p.points;
-    }
-
-    const me = tour.placements.find(p => p.team === FRANCHISE);
-    franchiseResults.push({
-      year, tName: tour.name,
-      place: me ? me.place : 0,   // 0 = did not qualify (finals only)
-    });
-    if (franchiseResults.length > 8) franchiseResults.shift();
-
+    history.push({ year, w: rec.w, l: rec.l, note });
+    if (history.length > 8) history.shift();
     summary = {
-      name: tour.name, month: tour.month, venue: tour.venue,
-      finals: tour.type === 'finals',
-      placements: tour.placements,
-      myPlace: me ? me.place : 0,
-      myPoints: me ? me.points : 0,
-      champion: tour.placements[0].team,
+      year, champion, runnerUp: loser(fin),
+      finalScore: {
+        a: fin.a, b: fin.b,
+        aShort: teamShort(fin.a), bShort: teamShort(fin.b),
+        scoreA: fin.scoreA, scoreB: fin.scoreB,
+      },
+      divWinners: weekGames(WEEK_DIV_F).map(g => ({ div: g.div, team: winner(g) })),
+      note, record: rec,
     };
-    tour.done = true;
-
-    // Advance the calendar; a new season starts with fresh standings
-    tIdx++;
-    if (tIdx >= TOURNAMENTS.length) { tIdx = 0; year++; standings = {}; }
-    tapCooldown = 0.4; // let the "TOURNAMENT COMPLETE" banner breathe
     save();
   }
 
   // ── Playing the player's match ──
-  function playerMatch() {
-    if (!tour || tour.done) return null;
-    return tour.matches.find(m => !m.played && (m.a === FRANCHISE || m.b === FRANCHISE)) || null;
-  }
-
   function beginMatch(m) {
     const opp = m.a === FRANCHISE ? m.b : m.a;
     const oppTeam = teamByName(opp);
@@ -247,7 +261,7 @@ function createManager(game) {
       oppPower: oppTeam ? oppTeam.power : 3,
       target: FORMAT.TARGET_SCORE,
       tag: m.tag,
-      tournament: `${tour.name} — ${tour.venue}`,
+      tournament: `RFA Season ${year} — ${weekLabel(week)}`,
       onEnd: res => onMatchEnd(m, res),
     });
   }
@@ -258,12 +272,21 @@ function createManager(game) {
     m.played = true;
     lastMatch = {
       myScore: res.myScore, oppScore: res.oppScore,
-      won: res.myScore > res.oppScore, opp: m.a === FRANCHISE ? m.b : m.a,
+      won: res.myScore > res.oppScore,
+      opp: m.a === FRANCHISE ? m.b : m.a,
+      oppShort: teamShort(m.a === FRANCHISE ? m.b : m.a),
       tag: m.tag, _fresh: true,
     };
-    screen = 'TOURNAMENT';
+    screen = 'WEEK';
     tapCooldown = 0.6;
     save();
+  }
+
+  function weekLabel(w) {
+    if (w < REGULAR_WEEKS) return `Week ${w + 1}`;
+    if (w === WEEK_DIV_SF) return 'Division Semifinals';
+    if (w === WEEK_DIV_F) return 'Division Finals';
+    return 'Championship Weekend';
   }
 
   // ── Per-frame update ──
@@ -272,49 +295,57 @@ function createManager(game) {
 
     if (screen === 'MATCH') {
       game.update(dt, input);
-      return; // game's onEnd callback switches us back to TOURNAMENT
+      return; // game's onEnd callback switches us back to WEEK
     }
 
-    // Advance CPU matches: when the player's team is out of the running
-    // (or between stages) the rest of the bracket simulates round by round —
-    // one stage of CPU matches per tap keeps the bracket fun to follow.
-    if (screen === 'TOURNAMENT' && tour && !tour.done) {
-      const pm = playerMatch();
-      if (!pm && !stageComplete(tour.stage)) {
-        // No player match in this stage → waiting for a tap to simulate it
-        if (input.justPressed && tapCooldown <= 0) {
-          for (const m of stageMatches(tour.stage)) if (!m.played) simulate(m);
-          if (lastMatch) lastMatch._fresh = false;
-          tapCooldown = 0.4;
+    if (screen === 'WEEK' && !seasonOver()) {
+      // While the franchise has a game this round, the rest of the slate
+      // simulates around it; with no franchise game a tap plays out the round
+      const mine = activeGames().find(g => g.isPlayer);
+      if (mine) {
+        for (const g of activeGames()) {
+          if (!g.played && !g.isPlayer) simulate(g);
         }
-      } else if (!pm && stageComplete(tour.stage)) {
-        const maxStage = tour.type === 'finals' ? 1 : 2;
-        if (tour.stage < maxStage) buildNextStage();
-        else finishTournament();
-      } else if (pm) {
-        // Player's match is ready — other matches of the stage simulate
-        // automatically so the bracket fills in around it.
-        for (const m of stageMatches(tour.stage)) {
-          if (!m.played && !m.isPlayer) simulate(m);
-        }
-        if (input.justPressed && tapCooldown <= 0) {
-          if (lastMatch) lastMatch._fresh = false;
-          beginMatch(pm);
-        }
+      }
+      // Championship weekend: semis done → build the final in place
+      if (week === WEEK_CHAMP && champStage === 0 && weekComplete()) {
+        buildChampFinal();
+        champStage = 1;
       }
     }
 
     if (input.justPressed && tapCooldown <= 0) {
       if (screen === 'HUB') {
-        if (!tour || tour.done) newTournament();
-        screen = 'TOURNAMENT';
+        if (seasonOver()) {
+          if (!summary) crownSeason();
+          screen = 'SUMMARY';
+        } else {
+          screen = 'WEEK';
+        }
         tapCooldown = 0.4;
+      } else if (screen === 'WEEK') {
+        if (lastMatch) lastMatch._fresh = false;
+        if (seasonOver()) {
+          if (!summary) crownSeason();
+          screen = 'SUMMARY';
+          tapCooldown = 0.4;
+        } else {
+          const pm = playerMatch();
+          if (weekComplete()) {
+            advance();
+            tapCooldown = 0.4;
+          } else if (pm) {
+            beginMatch(pm);
+          } else {
+            for (const g of activeGames()) if (!g.played) simulate(g);
+            tapCooldown = 0.4;
+          }
+        }
       } else if (screen === 'SUMMARY') {
         summary = null;
+        year++;
+        startSeason();
         screen = 'HUB';
-        tapCooldown = 0.4;
-      } else if (screen === 'TOURNAMENT' && tour && tour.done) {
-        screen = 'SUMMARY';
         tapCooldown = 0.4;
       }
     }
@@ -322,56 +353,67 @@ function createManager(game) {
 
   // ── Render snapshot ──
   function getState() {
-    const season = TOURNAMENTS.map((t, i) => ({
-      name: t.name, month: t.month, venue: t.venue,
-      done: i < tIdx, current: i === tIdx,
-    }));
-    const standingsArr = TEAMS
-      .map(t => ({ name: t.name, short: t.short, power: t.power, pts: standings[t.name] || 0 }))
-      .sort((a, b) => b.pts - a.pts || a.name.localeCompare(b.name));
+    const standings = computeStandings();
+    const myTable = standings.find(t => t.name === divisionOf(FRANCHISE).name);
+    const myRank = myTable.rows.findIndex(r => r.name === FRANCHISE) + 1;
+    const wkGames = week === WEEK_CHAMP
+      ? weekGames(WEEK_CHAMP)      // show semis + final together
+      : activeGames();
+    const pm = wkGames.find(g => g.isPlayer && !g.played);
 
-    // Bracket grouped by stage for the renderer
-    let bracket = null;
-    if (tour) {
-      bracket = {
-        name: tour.name, month: tour.month, venue: tour.venue,
-        type: tour.type, done: tour.done, stage: tour.stage,
-        qualified: tour.qualified || null,
-        hasPlayer: tour.matches.some(m => m.isPlayer),
-        stages: [0, 1, 2].map(st =>
-          stageMatches(st).map(m => ({
-            tag: m.tag, a: m.a, b: m.b,
-            scoreA: m.scoreA, scoreB: m.scoreB,
-            played: m.played, isPlayer: m.isPlayer,
-            shortA: teamShort(m.a), shortB: teamShort(m.b),
-          }))
-        ),
+    const weekView = {
+      label: weekLabel(week),
+      games: wkGames.map(m => ({
+        tag: m.tag, div: m.div, a: m.a, b: m.b,
+        shortA: teamShort(m.a), shortB: teamShort(m.b),
+        scoreA: m.scoreA, scoreB: m.scoreB,
+        played: m.played, isPlayer: m.isPlayer,
+      })),
+      complete: weekComplete(),
+      next: null,
+    };
+    if (week + 1 < REGULAR_WEEKS) {
+      weekView.next = {
+        label: weekLabel(week + 1),
+        games: schedule.weeks[week + 1].map(g => ({
+          a: g.a, b: g.b,
+          shortA: teamShort(g.a), shortB: teamShort(g.b),
+          div: g.inter ? 'RFA' : g.div,
+        })),
       };
     }
 
-    // Season rank of the franchise (for the finals qualification display)
-    const seasonRank = standingsArr.findIndex(s => s.name === FRANCHISE) + 1;
-    const nextIsFinals = !!TOURNAMENTS[tIdx].finals;
-
     return {
-      screen, year, tIdx, season, standings: standingsArr,
+      screen, year, week,
+      weekLabel: weekLabel(week),
+      rfaName: RFA,
       franchise: FRANCHISE, franchiseShort: teamShort(FRANCHISE),
-      franchiseResults,
-      nextIsFinals, seasonRank,
-      qualifies: nextIsFinals ? seasonRank >= 1 && seasonRank <= 4 : null,
-      tour, bracket, lastMatch, summary,
-      nextTournament: TOURNAMENTS[tIdx],
+      franchiseRecord: franchiseRecord(), franchiseRank: myRank,
+      franchiseDivision: divisionOf(FRANCHISE).name,
+      seasonOver: seasonOver(), champion, summary,
+      standings, history,
+      playoffsLive: week >= REGULAR_WEEKS,
+      weekView,
+      playerMatch: pm ? {
+        opp: pm.a === FRANCHISE ? pm.b : pm.a,
+        oppShort: teamShort(pm.a === FRANCHISE ? pm.b : pm.a),
+        tag: pm.tag,
+      } : null,
+      lastMatch,
     };
   }
 
   // ── Debug / testing hook: wipe the save ──
   function resetCareer() {
-    year = 1; tIdx = 0; standings = {}; franchiseResults = [];
-    tour = null; summary = null; lastMatch = null;
+    year = 1;
+    champion = null;
+    history = [];
+    startSeason();
+    summary = null;
     screen = 'HUB';
     try { localStorage.removeItem(SAVE_KEY); } catch (e) { /* ignore */ }
   }
 
-  load();
+  if (!load()) startSeason();
   return { update, getState, resetCareer };
 }

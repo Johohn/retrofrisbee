@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><title>RFA visual test</title>
+<style>body { background: #222; margin: 8px; } canvas { display: block; margin: 0 0 8px 0; }</style>
+</head>
+<body>
+<script>function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }</script>
+<script src="../js/config.js"></script>
+<script src="../js/data.js"></script>
+<script src="../js/schedule.js"></script>
+<script src="../js/manager.js"></script>
+<script src="../js/manager_renderer.js"></script>
+<script>
+let pendingOnEnd = null, matchOpts = null;
+const game = { init() {}, update() {}, startMatch(o) { pendingOnEnd = o.onEnd; matchOpts = o; } };
+try { localStorage.removeItem('retro-frisbee-manager-v2'); } catch (e) {}
+const manager = createManager(game);
+
+function powerOf(n) { const t = TEAMS.find(t => t.name === n); return t ? t.power : 3; }
+function playMyMatch() {
+  const p = powerOf(FRANCHISE), o = powerOf(matchOpts.oppName);
+  const pWin = clamp(0.5 + (p - o) * 0.08, 0.15, 0.85);
+  const iWin = Math.random() < pWin;
+  const lose = Math.floor(Math.random() * Math.random() * 4);
+  const cb = pendingOnEnd; pendingOnEnd = null;
+  cb(iWin ? { myScore: 5, oppScore: lose } : { myScore: lose, oppScore: 5 });
+}
+function driveTo(cond, maxSteps) {
+  const inp = { justPressed: true };
+  for (let i = 0; i < maxSteps; i++) {
+    manager.update(0.5, inp);
+    if (manager.getState().screen === 'MATCH') playMyMatch();
+    if (cond()) return true;
+  }
+  return false;
+}
+const shots = [];
+function snap(label) {
+  const c = document.createElement('canvas');
+  c.width = 800; c.height = 450;
+  const r = createManagerRenderer(c);
+  r.render(manager.getState());
+  document.body.appendChild(c);
+  shots.push(label);
+}
+
+// 1. HUB mid regular season (week 5)
+driveTo(() => manager.getState().week === 5 && manager.getState().screen !== 'MATCH', 5000);
+manager.update(0.5, { justPressed: true }); // -> WEEK
+driveTo(() => manager.getState().screen === 'WEEK', 20);
+snap('week5-slate');
+manager.update(0.5, { justPressed: true }); // back -> HUB? (week just advanced)
+snap('hub-midseason');
+
+// 2. HUB at division semifinals
+driveTo(() => manager.getState().week === 12, 5000);
+snap('hub-playoffs');
+manager.update(0.5, { justPressed: true });
+driveTo(() => manager.getState().screen === 'WEEK', 20);
+snap('week-divsf');
+
+// 3. Championship weekend with the final built
+driveTo(() => manager.getState().week === 14 && manager.getState().weekView.games.length === 3, 5000);
+snap('week-champ');
+driveTo(() => manager.getState().seasonOver, 200);
+manager.update(0.5, { justPressed: true });
+driveTo(() => manager.getState().screen === 'SUMMARY', 20);
+snap('summary');
+
+document.title = 'SHOTS: ' + shots.join(', ');
+</script>
+</body>
+</html>
