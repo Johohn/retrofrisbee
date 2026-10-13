@@ -3,21 +3,25 @@
 // 22 teams in 4 divisions (two with 6 teams, two with 5). 12 weeks, every
 // team plays every week — no byes anywhere:
 //
-//   Weeks 1–10   Divisional double round robin in all four divisions.
-//                6-team divisions: 3 games per week, everyone busy.
-//                5-team divisions: 2 games per week and one team idle —
-//                that idle team plays the idle team of the OTHER 5-team
-//                division, so the interdivisional series absorbs the byes.
-//   Weeks 11–12  Interdivisional only. The two 6-team divisions cross-play
-//                (each team meets 2 teams of the other). The two 5-team
-//                divisions finish their 4-game inter slate: they have 2
-//                games banked from the bye weeks and play 2 more here, so
-//                each team meets 4 distinct opponents of its partner
-//                division and skips exactly one.
+//   10 weeks per division  Divisional double round robin. 6-team divisions:
+//                          3 games per week, everyone busy. 5-team
+//                          divisions: 2 games per week and one team idle —
+//                          that idle team plays the idle team of the OTHER
+//                          5-team division, so the interdivisional series
+//                          absorbs the byes.
+//   2 weeks per division pair  Full cross-play. The two 6-team divisions
+//                          cross-play (6 games, everyone busy); the two
+//                          5-team divisions play a full inter round (5
+//                          games). WHICH weeks these are is seeded, so
+//                          cross-division games are scattered over the
+//                          calendar instead of piling up at the end.
 //
 // Each team therefore plays exactly 12 games: every divisional opponent
 // twice, plus 2 (6-team divisions) or 4 (5-team divisions) interdivisional
-// opponents once — never an interdivisional rematch.
+// opponents once — never an interdivisional rematch. The 5-team divisions
+// bank 2 inter games on their bye weeks and play 2 more on the cross weeks,
+// so each meets 4 distinct opponents of its partner division and skips
+// exactly one.
 //
 // The second half of each double round robin runs in rotated order so no
 // team meets the same opponent two weeks running. Team order inside each
@@ -116,41 +120,58 @@ function createSchedule(divisions, seed) {
   const order = divisions.map(d => shuffled(d.teams.map(t => t.name), rng));
   const rr = order.map(roundRobin);
 
-  // ── Weeks 1–10: divisional double round robin everywhere ──
-  // Division 2 (first 5-team division) repeats its round order — its bye
-  // pattern is what the bye-week inter games hang on. Division 3 rotates
-  // its order, so its bye weeks move and the same pairings don't repeat.
-  for (let w = 0; w < 10; w++) {
-    divisions.forEach((d, di) => {
-      const base = w < 5 ? w : (di === 2 ? w - 5 : ROT[w - 5]);
-      for (const [a, b] of rr[di][base].pairs) add(w, a, b, d.name, false);
-    });
-  }
+  // Round-consumption order per division: the first half of the double
+  // round robin in natural order, the second half rotated — except division
+  // 2, which repeats its order so its bye pattern is what the bye-week
+  // inter games hang on (see below).
+  const SEQ_ROT = [0, 1, 2, 3, 4, ROT[0], ROT[1], ROT[2], ROT[3], ROT[4]];
+  const SEQ_REP = [0, 1, 2, 3, 4, 0, 1, 2, 3, 4];
+  const seq = [SEQ_ROT, SEQ_ROT, SEQ_REP, SEQ_ROT];
 
-  // ── Weeks 1–10: interdivisional games on the 5-team bye slots ──
-  // Each week the idle team of division 2 plays the idle team of division
-  // 3. The rotated bye pattern means every team gets 2 inter games here —
-  // against 2 different opponents.
+  // ── Pick the cross-play weeks (seeded — they move every season) ──
+  // Each division pair spends two of the twelve weeks on full interdivisional
+  // rounds; every other week is divisional play (with the 5-team divisions'
+  // byes soaking up one inter game each). Which weeks get picked is random,
+  // so cross-division games land all over the calendar.
+  const weekOrder = shuffled([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11], rng);
+  const cross61 = [weekOrder[0], weekOrder[1]]; // 6-team divisions cross-play
+  const cross53 = [weekOrder[2], weekOrder[3]]; // 5-team divisions cross-play
+
+  // ── Lay out the divisional weeks and bank the bye-week inter games ──
+  const pos = [0, 0, 0, 0]; // next index into seq[] per division
   const byePairs = [];
-  for (let w = 0; w < 10; w++) {
-    const c = rr[2][w % 5].bye;
-    const d = rr[3][w < 5 ? w : ROT[w - 5]].bye;
+  for (let w = 0; w < N_WEEKS; w++) {
+    if (cross61.includes(w)) {
+      // The two 6-team divisions cross-play: team i of one meets team i
+      // (first cross week) then team i+1 (second) of the other — a perfect
+      // week of 6 games.
+      const half = cross61.indexOf(w);
+      for (let i = 0; i < 6; i++) {
+        add(w, order[0][i], order[1][half === 0 ? i : (i + 1) % 6], 'RFA', true);
+      }
+    } else {
+      for (const [a, b] of rr[0][seq[0][pos[0]++]].pairs) add(w, a, b, divisions[0].name, false);
+      for (const [a, b] of rr[1][seq[1][pos[1]++]].pairs) add(w, a, b, divisions[1].name, false);
+    }
+    if (cross53.includes(w)) continue; // filled in below, after the matchings
+    for (const [a, b] of rr[2][seq[2][pos[2]]].pairs) add(w, a, b, divisions[2].name, false);
+    for (const [a, b] of rr[3][seq[3][pos[3]]].pairs) add(w, a, b, divisions[3].name, false);
+    // Each week the idle team of division 2 plays the idle team of division
+    // 3. The shifted bye patterns mean every team gets 2 inter games here —
+    // against 2 different opponents.
+    const c = rr[2][seq[2][pos[2]]].bye;
+    const d = rr[3][seq[3][pos[3]]].bye;
     byePairs.push([c, d]);
     add(w, c, d, 'RFA', true);
+    pos[2]++; pos[3]++;
   }
 
-  // ── Weeks 11–12: interdivisional only ──
-  // The two 6-team divisions cross-play: team i of one meets team i, then
-  // team i+1, of the other — 2 games each, perfect weeks of 6.
-  for (let i = 0; i < 6; i++) {
-    add(10, order[0][i], order[1][i], 'RFA', true);
-    add(11, order[0][i], order[1][(i + 1) % 6], 'RFA', true);
-  }
-
-  // The two 5-team divisions need 2 more inter games each, against
-  // opponents they haven't met. The remaining allowed pairs form a
-  // 3-regular bipartite graph — decompose it into perfect matchings and
-  // use two of them; the third is the one opponent each team skips.
+  // ── Fill the two 5-team cross-play weeks ──
+  // After the bye games each team of divisions 2/3 has met 2 inter opponents
+  // and needs 2 more, against opponents it hasn't played. The remaining
+  // allowed pairs form a 3-regular bipartite graph — decompose it into
+  // perfect matchings and use two of them; the third is the one opponent
+  // each team skips.
   const C = order[2], D = order[3];
   const played = new Set(byePairs.map(([c, d]) => c + '|' + d));
   const allowedIdx = C.map(c =>
@@ -160,8 +181,10 @@ function createSchedule(divisions, seed) {
   const allowed2 = allowedIdx.map((list, ci) => list.filter(di => di !== m1[ci]));
   const m2 = perfectMatching(allowed2, D.length);
   if (!m2) throw new Error('schedule.js — no second interdivisional matching');
-  C.forEach((c, ci) => add(10, c, D[m1[ci]], 'RFA', true));
-  C.forEach((c, ci) => add(11, c, D[m2[ci]], 'RFA', true));
+  cross53.forEach((w, half) => {
+    const m = half === 0 ? m1 : m2;
+    C.forEach((c, ci) => add(w, c, D[m[ci]], 'RFA', true));
+  });
 
   // ── Sanity check: 12 games per team, once per week, no triple rematches ──
   const errs = validateSchedule(weeks, order.flat());

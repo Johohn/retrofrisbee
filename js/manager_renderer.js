@@ -1,5 +1,5 @@
-// manager_renderer.js — Draws the manager screens (HUB, week, summary)
-// onto the same canvas the match renderer uses.
+// manager_renderer.js — Draws the manager screens (team select, HUB, week,
+// summary) onto the same canvas the match renderer uses.
 
 function createManagerRenderer(canvas) {
   const ctx = canvas.getContext('2d');
@@ -52,6 +52,39 @@ function createManagerRenderer(canvas) {
       ctx.beginPath();
       ctx.arc(W - 60, H - 40, 20 + i * 14, 0, Math.PI * 2);
       ctx.stroke();
+    }
+  }
+
+  // ── Team selection (first launch / after a reset) ──
+  // Rows are drawn with SELECT_LAYOUT (manager.js), which also hit-tests taps.
+  function drawSelect(gs) {
+    drawBackground();
+    text(gs.rfaName.toUpperCase(), W / 2, 30, 20, GOLD, 'center', true);
+    text(`SEASON ${gs.year} — CHOOSE THE TEAM YOU MANAGE`, W / 2, 48, 11, DIM, 'center');
+
+    const L = SELECT_LAYOUT;
+    gs.select.divisions.forEach((d, di) => {
+      const x = L.x0 + di * (L.pw + L.gap);
+      panel(x, L.y0, L.pw, L.ph);
+      text(d.name.toUpperCase(), x + 10, L.y0 + 20, 11, GOLD, 'left', true);
+      d.teams.forEach((t, ri) => {
+        const y = L.rowY0 + ri * L.rowH;
+        const me = t.name === gs.select.chosen;
+        if (me) {
+          ctx.fillStyle = 'rgba(255,221,68,0.14)';
+          ctx.fillRect(x + 3, y - 12, L.pw - 6, L.rowH - 4);
+        }
+        text(t.name, x + 10, y, 9, me ? GOLD : INK, 'left', me);
+        text(`PWR ${t.power}`, x + L.pw - 10, y, 9, me ? GOLD : DIM, 'right');
+      });
+    });
+
+    panel(0, H - 46, W, 46, PANEL);
+    if (gs.select.chosen) {
+      text(`MANAGING: ${gs.select.chosen.toUpperCase()}`, W / 2, H - 27, 13, GOLD, 'center', true);
+      blinking('TAP THE SAME TEAM AGAIN TO START', W / 2, H - 10, 12);
+    } else {
+      text('TAP A TEAM TO SELECT IT', W / 2, H - 18, 13, INK, 'center', true);
     }
   }
 
@@ -264,7 +297,8 @@ function createManagerRenderer(canvas) {
   // ── Entry ──
   function render(gs) {
     ctx.clearRect(0, 0, W, H);
-    if (gs.screen === 'HUB') drawHub(gs);
+    if (gs.screen === 'SELECT') drawSelect(gs);
+    else if (gs.screen === 'HUB') drawHub(gs);
     else if (gs.screen === 'WEEK') drawWeek(gs);
     else if (gs.screen === 'SUMMARY') drawSummary(gs);
   }

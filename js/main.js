@@ -37,7 +37,8 @@ const managerRenderer = createManagerRenderer(canvas);
 // Curve type is switched with the ↑ / ↓ arrow keys or a second-finger tap
 // (both handled in game.js — see updateThrowing).
 
-// Career reset — hold Shift and press R on any manager screen
+// Career reset — hold Shift and press R on any manager screen; wipes the
+// save and returns to the team-selection screen
 window.addEventListener('keydown', e => {
   if (e.key === 'R' && e.shiftKey) {
     manager.resetCareer();

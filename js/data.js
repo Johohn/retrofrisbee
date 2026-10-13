@@ -20,10 +20,10 @@ const DIVISIONS = [
   {
     name: 'East',
     teams: [
-      { name: 'Boston Glory',    short: 'BOS', power: 3 },
+      { name: 'Boston Glory',    short: 'BOS', power: 5 },
       { name: 'New York Empire', short: 'NY', power: 5 },
-      { name: 'DC Breeze',       short: 'DC', power: 2 },
-      { name: 'Toronto Rush',       short: 'TOR', power: 4 },
+      { name: 'DC Breeze',       short: 'DC', power: 4 },
+      { name: 'Toronto Rush',       short: 'TOR', power: 2 },
       { name: 'Montreal Royal',       short: 'MON', power: 1 },
       { name: 'Philadelphia Phoenix',       short: 'PHI', power: 3 },
     ],
@@ -32,21 +32,21 @@ const DIVISIONS = [
     name: 'South',
     teams: [
       { name: 'Austin Sol',      short: 'AUS', power: 4 },
-      { name: 'Carolina Flyers',         short: 'CAR', power: 2 },
-      { name: 'San Diego Growlers',         short: 'SD', power: 4 },
-      { name: 'Atlanta Hustle',        short: 'ATL', power: 3 },
+      { name: 'Carolina Flyers',         short: 'CAR', power: 5 },
+      { name: 'San Diego Growlers',         short: 'SD', power: 3 },
+      { name: 'Atlanta Hustle',        short: 'ATL', power: 4 },
       { name: 'Houston Havoc',        short: 'HOU', power: 2 },
-      { name: 'Vegas Bighorns',        short: 'LV', power: 5 },
+      { name: 'Vegas Bighorns',        short: 'LV', power: 1 },
     ],
   },
   {
     name: 'West',
     teams: [
-      { name: 'Oakland Spiders',        short: 'OAK', power: 3 },
-      { name: 'Seattle Cascades',          short: 'SEA', power: 1 },
+      { name: 'Oakland Spiders',        short: 'OAK', power: 5 },
+      { name: 'Seattle Cascades',          short: 'SEA', power: 4 },
       { name: 'Salt Lake Shred',    short: 'SLC', power: 3 },
-      { name: 'Colorado Apex',       short: 'COL', power: 4 },
-      { name: 'Oregon Steel',      short: 'ORE', power: 2 },
+      { name: 'Colorado Apex',       short: 'COL', power: 2 },
+      { name: 'Oregon Steel',      short: 'ORE', power: 1 },
     ],
   },
   {
@@ -54,9 +54,9 @@ const DIVISIONS = [
     teams: [
       { name: 'Minnesota Wind Chill',     short: 'MIN', power: 5 },
       { name: 'Madison Radicals',       short: 'MAD', power: 3 },
-      { name: 'Indianapolis AlleyCats',      short: 'IND', power: 2 },
-      { name: 'Pittsburgh Thunderbirds',         short: 'PIT', power: 4 },
-      { name: 'Chicago Union',      short: 'CHI', power: 1 },
+      { name: 'Indianapolis AlleyCats',      short: 'IND', power: 3 },
+      { name: 'Pittsburgh Thunderbirds',         short: 'PIT', power: 2 },
+      { name: 'Chicago Union',      short: 'CHI', power: 4 },
     ],
   },
 ];
@@ -64,8 +64,8 @@ const DIVISIONS = [
 // Flat list of every team (derived — no need to edit)
 const TEAMS = DIVISIONS.flatMap(d => d.teams);
 
-// The team the player manages (must match a name above)
-const FRANCHISE = 'Austin Sol';
+// The player picks which team to manage when a career starts (SELECT screen)
+// — no fixed franchise here.
 
 // ── Season format ──
 // 12 regular-season weeks (everyone plays every week — see schedule.js),
