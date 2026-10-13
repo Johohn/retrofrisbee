@@ -59,8 +59,9 @@ function createGame() {
   let tournamentLabel = '';
   let onMatchEnd = null;                // callback({myScore, oppScore, won})
   let matchEndSent = false;
-  // Opponent skill multiplier on their advance/interception rolls
-  const OPP_FACTOR = () => 0.8 + (oppPower - 3) * 0.07;
+  // Opponent skill multiplier on their advance/interception rolls.
+  // Power 5 (the strongest teams) pushes the 70% goal-line advance above 70%.
+  const OPP_FACTOR = () => 0.8 + (oppPower - 3) * 0.12;
 
   const camera = { x: 0, tgtX: 0 };
 
@@ -665,7 +666,9 @@ function createGame() {
         callahanRisk: inTheirEndZone,
       });
 
-      const where = inTheirEndZone ? 'their own end zone' : startZone.label;
+      // A turnover in their end zone starts them back-field, same wording
+      // as a turnover in back-field — the Callahan chance stays.
+      const where = startZone.label;
       message = `${msg}.  OPP starts in ${where}.`;
       messageTimer = 2.0;
       phase = 'RESULT';
@@ -807,7 +810,7 @@ function createGame() {
         break;
 
       case 'RESULT':
-        updateResult(dt);
+        updateResult(dt, input);
         break;
 
       case 'GAME_OVER':
@@ -887,7 +890,9 @@ function createGame() {
     const dragDist = Math.hypot(dragOffX, dragOffY);
     const power = clamp(dragDist / C_DSC.DRAG_MAX_LENGTH, 0, 1);
 
-    if (input.isDown && dragDist > 5) {
+    // Preview only once the drag passes the throw threshold — inside the
+    // cancel zone (DRAG_MIN_THROW) no line appears and release throws nothing.
+    if (input.isDown && dragDist > C_DSC.DRAG_MIN_THROW) {
       // Reverse direction: if you drag NW, throw goes SE
       const revDir = norm(-dragOffX, -dragOffY);
       const targetDist = 60 + power * 280;
@@ -905,7 +910,7 @@ function createGame() {
       currentAim = null;
     }
 
-    if (input.justReleased && dragDist > 15) {
+    if (input.justReleased && dragDist > C_DSC.DRAG_MIN_THROW) {
       const revDir = norm(-dragOffX, -dragOffY);
       const targetDist = 60 + power * 280;
       const targetX = thrower.x + revDir.x * targetDist;
@@ -1024,7 +1029,10 @@ function createGame() {
   }
 
   // ── RESULT phase ──
-  function updateResult(dt) {
+  function updateResult(dt, input) {
+    // Tap to skip: while the defence is being narrated (opponent possession),
+    // a tap anywhere jumps straight to the next roll / situation
+    if (oppState && input.justPressed) messageTimer = 0;
     messageTimer -= dt;
     if (messageTimer > 0 || phase === 'GAME_OVER') return;
 
@@ -1163,6 +1171,7 @@ function createGame() {
       targetScore: matchTarget,
       message,
       messageTimer,
+      skippable: !!oppState,   // defence narration — a tap jumps ahead
       wind,
       curveType,
       openReceiver: defenseView ? null : openReceiver,

@@ -390,8 +390,8 @@ function createRenderer(canvas) {
       // ── Stall count ──
       const st = gs.stallCount;
       let color = C.STALL_OK;
-      if (st >= 8) color = C.STALL_CRIT;
-      else if (st >= 5) color = C.STALL_WARN;
+      if (st >= CONFIG.STALL.COUNT - 1) color = C.STALL_CRIT;
+      else if (st >= CONFIG.STALL.COUNT - 3) color = C.STALL_WARN;
 
       ctx.fillStyle = C.HUD_BG;
       ctx.fillRect(W - 70, 4, 60, 28);
@@ -443,7 +443,7 @@ function createRenderer(canvas) {
         ctx.fillStyle = '#aaa';
         ctx.font = '12px monospace';
         ctx.textAlign = 'center';
-        ctx.fillText('Continuing...', W / 2, (F.FIELD_TOP + F.FIELD_BOTTOM) / 2 + 25);
+        ctx.fillText(gs.skippable ? 'Tap anywhere to skip' : 'Continuing...', W / 2, (F.FIELD_TOP + F.FIELD_BOTTOM) / 2 + 25);
       }
     }
   }

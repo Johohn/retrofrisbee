@@ -1,6 +1,9 @@
 // config.js — All tuning numbers in one place
 const CONFIG = {
   // ── Field dimensions (logical pixels) ──
+  // VIEWPORT_W is dynamic: main.js recomputes it from the window aspect on
+  // resize (height stays fixed, width clamped to the field) so a wide screen
+  // shows more of the field and a narrow one less.
   FIELD: {
     VIEWPORT_W: 800,
     VIEWPORT_H: 450,
@@ -11,6 +14,15 @@ const CONFIG = {
     FIELD_PLAYING: 1050,        // ~70 yards between end zones
     TOTAL_W: 1650,             // 180 + 640 + 180
     SCORE_RESET_YARD: 300,     // 10px into the playing field from left end zone line
+  },
+
+  // ── Manager screens ──
+  // The career UI keeps a fixed logical layout and is uniformly scaled to
+  // fit the canvas (letterboxed); only the match viewport adapts to the
+  // window. The match viewport may be wider or narrower than this.
+  MANAGER: {
+    W: 800,
+    H: 450,
   },
 
   // ── Thrower ──
@@ -67,7 +79,8 @@ const CONFIG = {
     Z_VELOCITY: 80,        // initial z velocity at full power
     CATCH_RADIUS: 25,
     AIR_RESISTANCE: 0.997, // velocity multiplier per (normalised) frame
-    DRAG_MAX_LENGTH: 170,  // screen px drag = full power (field is only 1000px now)
+    DRAG_MAX_LENGTH: 160,  // screen px drag = full power (field is only 1000px now)
+    DRAG_MIN_THROW: 30,    // releasing this close to the aim start cancels the throw
     SIM_STEP: 1 / 60,      // fixed physics step — flight and aim preview MUST share it
     OOB_HARD_MARGIN: 150,  // px outside the lines that counts as out immediately, even airborne
     LAND_SPEED: 25,        // px/s — at ground level below this speed a disc counts as settled
@@ -83,19 +96,18 @@ const CONFIG = {
 
   // ── Stall ──
   STALL: {
-    COUNT: 10,
+    COUNT: 7,
     COUNT_SPEED: 1,        // 1 count per second
   },
 
   // ── Scoring ──
   SCORE: {
     WIN: 5,
-    TURNOVER_OPP_CHANCE: 0.8, // opponent scores on turnover
   },
 
   // ── Catch probabilities ──
   CATCH: {
-    BASE_CHANCE: 0.92,
+    BASE_CHANCE: 0.96,
     DIST_PENALTY: 0.002,   // per px distance
     DEF_PENALTY: 0.20,     // defender within MARK_DISTANCE
     HANDS_BONUS: 0.15,     // max bonus from receiver hands stat

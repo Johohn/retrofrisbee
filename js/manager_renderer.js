@@ -3,8 +3,11 @@
 
 function createManagerRenderer(canvas) {
   const ctx = canvas.getContext('2d');
-  const W = CONFIG.FIELD.VIEWPORT_W;
-  const H = CONFIG.FIELD.VIEWPORT_H;
+  // Fixed logical layout — main.js scales/centres this onto the canvas and
+  // remaps taps into the same space, so the career UI looks identical at
+  // any window size while the match viewport adapts.
+  const W = CONFIG.MANAGER.W;
+  const H = CONFIG.MANAGER.H;
 
   const INK      = '#e8e8e8';
   const DIM      = '#9aa0b0';
@@ -296,11 +299,21 @@ function createManagerRenderer(canvas) {
 
   // ── Entry ──
   function render(gs) {
-    ctx.clearRect(0, 0, W, H);
+    // Uniform scale + centring of the fixed manager layout onto the canvas
+    const s = Math.min(canvas.width / W, canvas.height / H);
+    const offX = (canvas.width - W * s) / 2;
+    const offY = (canvas.height - H * s) / 2;
+
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = '#000';   // letterbox bars
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.setTransform(s, 0, 0, s, offX, offY);
     if (gs.screen === 'SELECT') drawSelect(gs);
     else if (gs.screen === 'HUB') drawHub(gs);
     else if (gs.screen === 'WEEK') drawWeek(gs);
     else if (gs.screen === 'SUMMARY') drawSummary(gs);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
   }
 
   return { render };
